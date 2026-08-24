@@ -1,0 +1,22 @@
+# Never commit drawings or anything derived from them.
+# P&IDs are confidential; this repo should only ever contain the tool itself.
+*.pdf
+*.PDF
+
+# Base64 / test fixtures generated from real drawings
+*.b64
+*_test_data.js
+*_test.js
+par_t.js
+
+# Local scratch
+scratchpad/
+tmp/
+*.log
+
+# OS / editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
