@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDFREEDY Vision Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+:root{
+  --paper:#F2F4F3;
+  --surface:#FBFCFB;
+  --surface-2:#E9EDEB;
+  --ink:#151E1D;
+  --ink-2:#3D4C4A;
+  --ink-3:#6E7D7B;
+  --rule:#D4DAD8;
+  --rule-strong:#A9B4B1;
+  --redline:#C0392B;
+  --redline-soft:#F3DEDB;
+  --blue:#1D6A85;
+  --blue-soft:#DDEAEF;
+  --amber:#8A5D0C;
+  --amber-soft:#F2E7CE;
+  --green:#2F6B4F;
+  --green-soft:#DCEBE2;
+
+  --display:"Archivo",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --body:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+
+  --fs-xs:.72rem;
+  --fs-sm:.84rem;
+  --fs-base:1.06rem;
+  --fs-lg:1.22rem;
+  --fs-xl:1.62rem;
+  --fs-2xl:2.3rem;
+
+  --measure:68ch;
+  --gutter:9rem;
+}
+
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#101615;
+    --surface:#171F1E;
+    --surface-2:#1E2A28;
+    --ink:#E6ECEA;
+    --ink-2:#B3BFBD;
+    --ink-3:#7E8C8A;
+    --rule:#2A3533;
+    --rule-strong:#3E4C49;
+    --redline:#E8705F;
+    --redline-soft:#3A211D;
+    --blue:#5CB2CC;
+    --blue-soft:#152B33;
+    --amber:#D8A64A;
+    --amber-soft:#332813;
+    --green:#6FBF95;
+    --green-soft:#152B21;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#101615;
+  --surface:#171F1E;
+  --surface-2:#1E2A28;
+  --ink:#E6ECEA;
+  --ink-2:#B3BFBD;
+  --ink-3:#7E8C8A;
+  --rule:#2A3533;
+  --rule-strong:#3E4C49;
+  --redline:#E8705F;
+  --redline-soft:#3A211D;
+  --blue:#5CB2CC;
+  --blue-soft:#152B33;
+  --amber:#D8A64A;
+  --amber-soft:#332813;
+  --green:#6FBF95;
+  --green-soft:#152B21;
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--body);
+  font-size:var(--fs-base);
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{
+  max-width:78rem;
+  margin:0 auto;
+  padding:2rem 1.5rem 6rem;
+}
+
+/* ---------- title block ---------- */
+
+.titleblock{
+  border:1.5px solid var(--rule-strong);
+  background:var(--surface);
+  margin-bottom:3.5rem;
+}
+.titleblock-main{
+  padding:2rem 1.75rem 1.5rem;
+  border-bottom:1.5px solid var(--rule-strong);
+}
+.eyebrow{
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  margin:0 0 .9rem;
+}
+h1{
+  font-family:var(--display);
+  font-weight:700;
+  font-size:var(--fs-2xl);
+  line-height:1.08;
+  letter-spacing:-.022em;
+  margin:0 0 .7rem;
+  text-wrap:balance;
+  max-width:20ch;
+}
+.standfirst{
+  margin:0;
+  max-width:62ch;
+  color:var(--ink-2);
+  font-size:var(--fs-lg);
+  line-height:1.5;
+}
+.fields{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));
+}
+.field{
+  padding:.75rem 1.1rem .85rem;
+  border-right:1px solid var(--rule);
+}
+.field:last-child{border-right:none}
+.field dt{
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  margin:0 0 .25rem;
+}
+.field dd{
+  margin:0;
+  font-family:var(--display);
+  font-weight:600;
+  font-size:var(--fs-sm);
+  color:var(--ink);
+}
+
+/* ---------- section scaffolding ---------- */
+
+section{
+  display:grid;
+  grid-template-columns:var(--gutter) minmax(0,var(--measure));
+  gap:0 2.5rem;
+  margin-bottom:4rem;
+}
+.gutter{
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.11em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  padding-top:.55rem;
+  border-top:1.5px solid var(--ink);
+  line-height:1.5;
+}
+.col{min-width:0}
+
+h2{
+  font-family:var(--display);
+  font-weight:700;
+  font-size:var(--fs-xl);
+  letter-spacing:-.017em;
+  line-height:1.15;
+  margin:0 0 1rem;
+  padding-top:.4rem;
+  text-wrap:balance;
+}
+h3{
+  font-family:var(--display);
+  font-weight:600;
+  font-size:var(--fs-lg);
+  letter-spacing:-.01em;
+  margin:2.2rem 0 .6rem;
+  text-wrap:balance;
+}
+h4{
+  font-family:var(--mono);
+  font-weight:600;
+  font-size:var(--fs-sm);
+  letter-spacing:.04em;
+  margin:1.6rem 0 .4rem;
+  color:var(--ink-2);
+}
+p{margin:0 0 1rem}
+ul,ol{margin:0 0 1rem;padding-left:1.2rem}
+li{margin-bottom:.5rem}
+li::marker{color:var(--ink-3)}
+strong{font-weight:600}
+code{
+  font-family:var(--mono);
+  font-size:.86em;
+  background:var(--surface-2);
+  padding:.1em .34em;
+  border-radius:2px;
+}
+a{color:var(--blue);text-decoration-thickness:1px;text-underline-offset:2px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+/* ---------- callouts ---------- */
+
+.note{
+  border-left:3px solid var(--redline);
+  background:var(--redline-soft);
+  padding:1rem 1.25rem;
+  margin:1.5rem 0;
+}
+.note p:last-child{margin-bottom:0}
+.note .label{
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--redline);
+  display:block;
+  margin-bottom:.35rem;
+}
+.note.neutral{
+  border-left-color:var(--blue);
+  background:var(--blue-soft);
+}
+.note.neutral .label{color:var(--blue)}
+
+/* ---------- stage cards ---------- */
+
+.stages{
+  display:flex;
+  flex-direction:column;
+  gap:1px;
+  background:var(--rule);
+  border:1px solid var(--rule);
+  margin:1.5rem 0 2rem;
+}
+.stage{
+  background:var(--surface);
+  padding:1.1rem 1.25rem;
+  display:grid;
+  grid-template-columns:3.4rem minmax(0,1fr);
+  gap:1rem;
+}
+.stage-id{
+  font-family:var(--mono);
+  font-weight:600;
+  font-size:var(--fs-xs);
+  letter-spacing:.08em;
+  color:var(--ink-3);
+  padding-top:.28rem;
+}
+.stage h4{margin:0 0 .3rem;color:var(--ink);font-size:var(--fs-base);letter-spacing:0}
+.stage p{margin:0;font-size:var(--fs-sm);color:var(--ink-2);line-height:1.55}
+.stage p + p{margin-top:.5rem}
+.stage.new{border-left:3px solid var(--redline);padding-left:1rem}
+
+/* ---------- wide breakouts ---------- */
+
+.breakout{
+  grid-column:1 / -1;
+  margin-top:1.5rem;
+}
+.scroller{
+  overflow-x:auto;
+  border:1px solid var(--rule);
+  background:var(--surface);
+}
+
+table{
+  border-collapse:collapse;
+  width:100%;
+  min-width:44rem;
+  font-size:var(--fs-sm);
+}
+caption{
+  text-align:left;
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  padding:0 0 .6rem;
+}
+th,td{
+  text-align:left;
+  padding:.7rem .9rem;
+  border-bottom:1px solid var(--rule);
+  vertical-align:top;
+}
+thead th{
+  font-family:var(--mono);
+  font-weight:600;
+  font-size:var(--fs-xs);
+  letter-spacing:.09em;
+  text-transform:uppercase;
+  color:var(--ink-2);
+  border-bottom:1.5px solid var(--rule-strong);
+  white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+.pill{
+  display:inline-block;
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  font-weight:500;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  padding:.16em .5em;
+  border-radius:2px;
+  white-space:nowrap;
+}
+.pill.hi{background:var(--redline-soft);color:var(--redline)}
+.pill.med{background:var(--amber-soft);color:var(--amber)}
+.pill.lo{background:var(--green-soft);color:var(--green)}
+.pill.info{background:var(--blue-soft);color:var(--blue)}
+
+/* ---------- gantt ---------- */
+
+.gantt{
+  border:1px solid var(--rule);
+  background:var(--surface);
+  min-width:46rem;
+}
+.gantt-head,.gantt-row{
+  display:grid;
+  grid-template-columns:15rem repeat(10,1fr);
+  align-items:center;
+}
+.gantt-head{
+  border-bottom:1.5px solid var(--rule-strong);
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.06em;
+  color:var(--ink-3);
+}
+.gantt-head span{
+  padding:.5rem .3rem;
+  text-align:center;
+  border-left:1px solid var(--rule);
+}
+.gantt-head .gantt-label{
+  text-align:left;
+  border-left:none;
+  padding-left:.9rem;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+}
+.gantt-row{border-bottom:1px solid var(--rule)}
+.gantt-row:last-child{border-bottom:none}
+.gantt-label{
+  padding:.75rem .9rem;
+  font-family:var(--display);
+  font-weight:600;
+  font-size:var(--fs-sm);
+  line-height:1.3;
+}
+.gantt-label small{
+  display:block;
+  font-family:var(--mono);
+  font-weight:400;
+  font-size:var(--fs-xs);
+  color:var(--ink-3);
+  letter-spacing:.05em;
+  margin-top:.15rem;
+}
+.gantt-cell{
+  height:100%;
+  min-height:3rem;
+  border-left:1px solid var(--rule);
+}
+.bar{
+  height:.85rem;
+  margin:1.05rem 0;
+  border-radius:1px;
+  position:relative;
+}
+.bar.b1{background:var(--blue)}
+.bar.b2{background:var(--green)}
+.bar.b3{background:var(--redline)}
+.bar.b4{background:var(--amber)}
+.bar.start{margin-left:.3rem;border-top-left-radius:2px;border-bottom-left-radius:2px}
+.bar.end{margin-right:.3rem;border-top-right-radius:2px;border-bottom-right-radius:2px}
+
+/* ---------- misc ---------- */
+
+.kicker{
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  margin:0 0 .5rem;
+}
+.tag-example{
+  font-family:var(--mono);
+  font-size:var(--fs-sm);
+  background:var(--surface-2);
+  border-left:2px solid var(--rule-strong);
+  padding:.75rem 1rem;
+  margin:1rem 0;
+  overflow-x:auto;
+  white-space:pre;
+  line-height:1.9;
+}
+.tag-example b{color:var(--redline);font-weight:600}
+.tag-example i{color:var(--blue);font-style:normal;font-weight:600}
+
+footer{
+  grid-column:1 / -1;
+  border-top:1.5px solid var(--rule-strong);
+  padding-top:1rem;
+  margin-top:2rem;
+  font-family:var(--mono);
+  font-size:var(--fs-xs);
+  letter-spacing:.06em;
+  color:var(--ink-3);
+  display:flex;
+  flex-wrap:wrap;
+  gap:.5rem 2rem;
+}
+
+@media (max-width:52rem){
+  :root{--gutter:0}
+  section{grid-template-columns:minmax(0,1fr);gap:0}
+  .gutter{
+    border-top:none;
+    border-left:2px solid var(--ink);
+    padding:.15rem 0 .15rem .7rem;
+    margin-bottom:1rem;
+  }
+  h2{padding-top:0}
+  .stage{grid-template-columns:minmax(0,1fr);gap:.3rem}
+  .stage-id{padding-top:0}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="titleblock">
+  <div class="titleblock-main">
+    <p class="eyebrow">Technical proposal · Extraction &amp; search overhaul</p>
+    <h1>PDFREEDY Vision Pipeline</h1>
+    <p class="standfirst">Making tag extraction from scanned P&amp;IDs and isometrics fast enough to feel instant and accurate enough to trust — without a drawing ever leaving the machine it was opened on.</p>
+  </div>
+  <dl class="fields">
+    <div class="field"><dt>Project</dt><dd>PDFREEDY</dd></div>
+    <div class="field"><dt>Scope</dt><dd>OCR + inference + perf</dd></div>
+    <div class="field"><dt>Constraint</dt><dd>Fully local</dd></div>
+    <div class="field"><dt>Duration</dt><dd>10 weeks, 5 phases</dd></div>
+    <div class="field"><dt>Status</dt><dd>For approval</dd></div>
+  </dl>
+</header>
+
+<section>
+  <div class="gutter">Ref. 00<br>Premises</div>
+  <div class="col">
+    <h2>Two corrections to the brief before we start</h2>
+    <p>Both change what gets built, so they belong up front rather than buried in a caveats section.</p>
+
+    <div class="note">
+      <span class="label">Correction 1 · Cloud OCR is ruled out by the constraint</span>
+      <p>The brief names AWS Textract, Google Cloud Vision, and hosted Donut/TrOCR. All three require uploading proprietary drawings to a third party and standing up a backend to broker it. You've confirmed drawings must stay on the machine, so <strong>none of them are on the table.</strong> Everything below is designed to hit the same objectives inside the browser. Where that costs us something real — and in one place it does — I say so rather than papering over it.</p>
+    </div>
+
+    <div class="note">
+      <span class="label">Correction 2 · The speed problem is ~50× worse than stated</span>
+      <p>The brief describes "multiple seconds per document." The actual figure in <code>README.md</code> is <strong>1–2 minutes per large scanned sheet</strong>, and roughly 4× that with rotated-text scanning enabled. That isn't a polish problem, it's an architectural one — and it's good news, because a bottleneck that large has structural causes with structural fixes, not micro-optimisations.</p>
+    </div>
+
+    <h3>What's actually causing it</h3>
+    <p>Three things in the current code, all fixable:</p>
+    <ol>
+      <li><strong>No parallelism.</strong> <code>runQueue</code> awaits one page at a time against a single shared Tesseract worker (<code>ocrWorker</code>). On an 8-core machine we're using one core.</li>
+      <li><strong>Whole-sheet OCR.</strong> Every page is rendered at <code>OCR_SCALE = 3.5</code> and handed to Tesseract entire. A P&amp;ID is mostly whitespace and line art; text occupies maybe 5–15% of the sheet. We're paying full price to recognise blank paper and pipe runs.</li>
+      <li><strong>Rotation by brute force.</strong> Vertical labels are caught by re-running the whole page at 0/90/180/270°, hence the 4× penalty and the reason the toggle ships off by default.</li>
+    </ol>
+    <p>None of these need a server to fix. They need a different pipeline shape.</p>
+  </div>
+</section>
+
+<section>
+  <div class="gutter">Ref. 01<br>Architecture</div>
+  <div class="col">
+    <h2>The proposed pipeline</h2>
+    <p>Six stages. Stages marked in red are new; the rest are existing code, kept because they're already right.</p>
+
+    <div class="stages">
+      <div class="stage new">
+        <div class="stage-id">S0</div>
+        <div>
+          <h4>Content-addressed cache</h4>
+          <p>SHA-256 the PDF bytes, key page results in IndexedDB by <code>hash + pipelineVersion + settings</code>. Re-opening a drawing you've already processed becomes instant instead of a full re-run — which today it always is.</p>
+          <p><strong>Requires committing to hosted deployment</strong> (GitHub Pages or an internal static host). The README already notes <code>file://</code> storage is unreliable across browsers; that's true of IndexedDB too. Still zero-install for users — just a URL instead of a double-click.</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="stage-id">S1</div>
+        <div>
+          <h4>Text layer extraction</h4>
+          <p>Unchanged. <code>getTextContent()</code> with the transform matrix per run, giving correctly angled highlight boxes for free. Native CAD exports never touch the OCR path at all.</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="stage-id">S2</div>
+        <div>
+          <h4>Adaptive binarization</h4>
+          <p>Unchanged, and it's the load-bearing piece the next stage depends on. The separable box-filter local threshold in <code>preprocessForOcr</code> already produces a clean binary plane; we're currently throwing it away after handing it to Tesseract.</p>
+        </div>
+      </div>
+      <div class="stage new">
+        <div class="stage-id">S3</div>
+        <div>
+          <h4>Text-region detection</h4>
+          <p>Two-pass union-find connected-component labelling on that binary plane. Filter components by stroke geometry — size bounds, aspect ratio, fill density — to separate glyphs from line art, then cluster survivors into text regions and estimate each region's dominant orientation from its principal axis.</p>
+          <p>This is the single biggest change in the proposal, and it does two jobs at once: OCR runs on ~5–15% of sheet area instead of 100%, <em>and</em> rotation becomes per-region. A vertical line label gets rotated upright on its own, in one pass. <strong>The 4× rotated-text penalty disappears and the toggle can be deleted</strong> — vertical scanning becomes always-on and effectively free.</p>
+        </div>
+      </div>
+      <div class="stage new">
+        <div class="stage-id">S4</div>
+        <div>
+          <h4>Two-tier recognition</h4>
+          <p><strong>Tier A — Tesseract worker pool.</strong> <code>Tesseract.createScheduler()</code> with <code>navigator.hardwareConcurrency - 1</code> workers, recognising region crops rather than sheets. Cropping also lets us drop from <code>SPARSE_TEXT</code> to <code>SINGLE_LINE</code>/<code>SINGLE_WORD</code>, which is more accurate per region because there's no layout ambiguity left to get wrong.</p>
+          <p><strong>Tier B — transformer second opinion.</strong> Low-confidence crops only (expected 5–10%) get re-read by TrOCR-small-printed via transformers.js on the WebGPU backend. Strictly a re-reader on crops, never a page engine. See the risk note below.</p>
+        </div>
+      </div>
+      <div class="stage new">
+        <div class="stage-id">S5</div>
+        <div>
+          <h4>Lexicon-constrained resolution</h4>
+          <p>Every read is resolved against the project line list and the nomenclature grammar before it reaches the index. This is where "smart guessing" actually happens — Ref. 02.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="note neutral">
+      <span class="label">On Donut and TrOCR specifically</span>
+      <p><strong>Donut is the wrong tool here.</strong> It's a document-understanding model built to read whole forms and receipts into structured output, at 200M+ parameters. We don't need document understanding — we need one short alphanumeric string read off a 200×40px crop. TrOCR-small-printed is ~60M parameters, ONNX-quantizable, and shaped exactly for that job. That's the one I'd carry into evaluation, and only as Tier B.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="gutter">Ref. 02<br>Objective 2<br>Inference</div>
+  <div class="col">
+    <h2>Contextual inference, built on the line list</h2>
+    <p>Your confirmation that line lists exist as spreadsheet exports is the most valuable input to this whole proposal. It converts the problem from <em>open-vocabulary OCR</em> — read arbitrary text off a degraded scan, which is hard — to <em>closed-vocabulary matching</em> — decide which of ~4,000 known strings this smudge most likely is, which is dramatically easier and far more defensible.</p>
+
+    <h3>Import and grammar induction</h3>
+    <p>Users import a line list CSV/XLSX per project. From it we derive two things:</p>
+    <ul>
+      <li><strong>The tag set</strong> — the finite list of strings that legitimately exist on this project.</li>
+      <li><strong>A nomenclature grammar</strong> — tokenising the list into its positional fields (pipe size, fluid code, sequence number, spec class, insulation code) and learning the alphabet valid in each. This lets us validate and complete tags that follow project convention but aren't literally in the list yet.</li>
+    </ul>
+
+    <h3>Weighted resolution, reusing what's already there</h3>
+    <p>The codebase already contains the key insight, in <code>CONFUSION_OF</code>: OCR failures on CAD callout fonts aren't random, they're a small set of physically indistinguishable glyph pairs. Today that drives a positional substring match. We promote it into the cost function of a weighted edit distance against the tag set — confusable substitutions near-free, everything else expensive.</p>
+
+    <div class="tag-example">OCR read   V-68<b>O</b>1-<b>l</b>5PW4/3-75<b>O</b>-PP<b>G</b>O-RE1
+Line list  V-68<i>0</i>1-<i>1</i>5PW4/3-75<i>0</i>-PP<i>6</i>0-RE1   ← 4 subs, all confusable, cost 0.4
+Runner-up  V-6801-15PW4/3-750-PP60-RE7   ← 1 sub, NOT confusable, cost 3.0</div>
+
+    <p>The runner-up is a closer match by plain edit distance and the wrong answer. Confusion-weighting gets this right, and the existing <code>tests/matching.test.js</code> already pins down the principle — we're extending a proven mechanism, not inventing one.</p>
+
+    <h3>Guesses must never look like certainties</h3>
+    <p>The current tool has good discipline here — fuzzy matching off by default, <code>GLYPH</code> and <code>FUZZY</code> badges, OCR confidence always shown. Inference makes that discipline more important, not less. Three bands, surfaced in the UI:</p>
+
+    <div class="breakout">
+      <div class="scroller">
+        <table>
+          <caption>Confidence banding</caption>
+          <thead>
+            <tr><th>Band</th><th>Condition</th><th>Presentation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="pill lo">Confirmed</span></td>
+              <td>Read matches a line-list tag exactly, or came from the PDF text layer</td>
+              <td>Shown plainly, no qualifier</td>
+            </tr>
+            <tr>
+              <td><span class="pill med">Inferred</span></td>
+              <td>Resolved to exactly one tag under confusion-weighted distance, with a clear margin over the runner-up</td>
+              <td>Badged, raw read shown alongside, one-click accept or reject</td>
+            </tr>
+            <tr>
+              <td><span class="pill hi">Ambiguous</span></td>
+              <td>Two or more candidates within the margin, or grammar-valid but absent from the list</td>
+              <td>All candidates listed with the crop; user picks. Never auto-resolved.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="gutter">Ref. 03<br>Objective 3<br>Learning</div>
+  <div class="col">
+    <h2>The learning loop, scoped honestly</h2>
+    <p>There's already a correction mechanism, and the README is admirably blunt that it's "a memorised dictionary, not machine learning" — fixing one <code>O→0</code> teaches it nothing about <code>O→0</code> anywhere else. That's the gap to close.</p>
+
+    <h3>From dictionary to log</h3>
+    <p>Replace the flat <code>localStorage</code> map with an append-only corrections log in IndexedDB, recording raw read, corrected value, region geometry, engine, tier, and per-character confidence. From that log we derive two things that <em>do</em> generalise:</p>
+    <ul>
+      <li><strong>A learned confusion cost matrix.</strong> Observed corrections update per-character substitution costs, seeded from the hand-authored classes. If your drawings' particular font confuses <code>4</code> and <code>A</code>, the system learns that from three corrections and applies it to every future sheet — which the current dictionary structurally cannot do.</li>
+      <li><strong>Per-project tag priors.</strong> Tags corrected toward, or confirmed often, get a small prior boost in resolution.</li>
+    </ul>
+
+    <h3>Sharing learning without a server</h3>
+    <p>Local-only means no shared database, so corrections would otherwise stay trapped on one laptop. Mitigation: <strong>export and import the corrections log as a JSON file</strong> that a team keeps on a network drive, with merge-on-import. It's manual where a backend would be automatic, and I'd rather name that plainly than pretend otherwise.</p>
+
+    <div class="note">
+      <span class="label">Limit · What "learning" cannot mean here</span>
+      <p>The brief says the model should improve over time. With no backend, <strong>model weights cannot be fine-tuned in the browser.</strong> What improves automatically is the inference layer — confusion costs, priors, tag sets. Genuine TrOCR fine-tuning on collected crops is an <em>offline</em> job on a workstation, shipping updated weights as a new static asset on a release cadence. That's a viable Phase 6+ if the corrections log shows enough volume to justify it; it is not something the loop does by itself.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="gutter">Ref. 04<br>Objective 4<br>Performance</div>
+  <div class="col">
+    <h2>Where the speed comes from</h2>
+    <p>Four independent multipliers, three of which compound on first pass.</p>
+
+    <div class="breakout">
+      <div class="scroller">
+        <table>
+          <caption>Projected extraction speedup, large scanned sheet</caption>
+          <thead>
+            <tr><th>Change</th><th>Mechanism</th><th>Est. factor</th><th>Risk</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Region detection</td><td>OCR ~10% of sheet area, not 100%</td><td class="num">5–10×</td><td><span class="pill med">Medium</span></td></tr>
+            <tr><td>Worker pool</td><td><code>createScheduler</code> across N−1 cores</td><td class="num">4–6×</td><td><span class="pill lo">Low</span></td></tr>
+            <tr><td>Per-region rotation</td><td>Removes the 4-pass sweep</td><td class="num">up to 4×</td><td><span class="pill med">Medium</span></td></tr>
+            <tr><td>Content-hash cache</td><td>Repeat opens skip the pipeline</td><td class="num">∞ (repeat)</td><td><span class="pill lo">Low</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p>These are engineering estimates from the code structure, not measurements — which is exactly why the eval harness lands in Phase 1, before anything that claims a number. The target I'd commit to: <strong>a large scanned sheet from ~90s to under 10s on first pass, and near-instant on any subsequent open</strong>, with rotated-text scanning on by default throughout.</p>
+
+    <h3>Search must be fast separately from extraction</h3>
+    <p>Extraction speed and search speed are different problems, and "instantaneous search" is the one users feel most. Today <code>runFullSearch</code> walks every page's results on every query. We build a normalised trigram index over resolved tokens at ingest, so query cost scales with the number of matches rather than the size of the document — genuinely instant, and it stays instant on a 300-sheet drawing set.</p>
+
+    <h3>One structural prerequisite</h3>
+    <p>All of this roughly doubles the size of a file that is <strong>already 1,839 lines of HTML with inline script</strong>, and the tests currently lift functions out of it by name — which will not survive this. I'd split to ES modules with an <code>esbuild</code> step that still emits one deployable page. Users keep zero-install; we get real unit tests and a codebase that can absorb the change. This is a prerequisite, not a nice-to-have, and it's why Phase 1 opens with it.</p>
+  </div>
+</section>
+
+<section>
+  <div class="gutter">Ref. 05<br>Timeline</div>
+  <div class="col">
+    <h2>Rollout</h2>
+    <p>Five phases over ten weeks. Ordered so the <strong>lowest-risk, highest-relief work ships first</strong> — the speed fix needs no ML at all and lands in a fortnight. Every phase ships something usable on its own; if the programme stops early, nothing is left half-built.</p>
+  </div>
+
+  <div class="breakout">
+    <div class="scroller">
+      <div class="gantt">
+        <div class="gantt-head">
+          <span class="gantt-label">Phase</span>
+          <span>W1</span><span>W2</span><span>W3</span><span>W4</span><span>W5</span>
+          <span>W6</span><span>W7</span><span>W8</span><span>W9</span><span>W10</span>
+        </div>
+
+        <div class="gantt-row">
+          <div class="gantt-label">1 · Foundations<small>Modules, cache, worker pool, eval set</small></div>
+          <div class="gantt-cell"><div class="bar b1 start"></div></div>
+          <div class="gantt-cell"><div class="bar b1 end"></div></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div>
+        </div>
+
+        <div class="gantt-row">
+          <div class="gantt-label">2 · Region detection<small>CCA, per-region rotation</small></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"><div class="bar b2 start"></div></div>
+          <div class="gantt-cell"><div class="bar b2 end"></div></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+        </div>
+
+        <div class="gantt-row">
+          <div class="gantt-label">3 · Line-list inference<small>Import, grammar, banding</small></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"><div class="bar b3 start"></div></div>
+          <div class="gantt-cell"><div class="bar b3 end"></div></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+        </div>
+
+        <div class="gantt-row">
+          <div class="gantt-label">4 · Learning loop<small>Corrections log, cost matrix</small></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"><div class="bar b1 start"></div></div>
+          <div class="gantt-cell"><div class="bar b1 end"></div></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div>
+        </div>
+
+        <div class="gantt-row">
+          <div class="gantt-label">5 · Transformer tier<small>TrOCR eval, behind a flag</small></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div><div class="gantt-cell"></div>
+          <div class="gantt-cell"><div class="bar b4 start"></div></div>
+          <div class="gantt-cell"><div class="bar b4 end"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col" style="grid-column:2">
+    <h3>What each phase delivers</h3>
+
+    <h4>Phase 1 · Weeks 1–2 — Foundations</h4>
+    <p>Module split and build step; IndexedDB content-hash cache; Tesseract worker pool; <strong>and a labelled ground-truth set of real sheets with an eval harness.</strong> Ships a 4–6× speedup and instant repeat opens with no accuracy change.</p>
+    <p>The eval set matters more than it sounds. <strong>There is no accuracy measurement in the project today</strong>, which makes every later claim unfalsifiable — including mine. Nothing after this phase gets merged without a number attached.</p>
+
+    <h4>Phase 2 · Weeks 3–4 — Region detection</h4>
+    <p>Connected-component analysis, region clustering, per-region orientation. The other large speed multiplier, and rotated/vertical text becomes on-by-default. Expected to <em>increase</em> recall on vertical line labels, since most users never turn the current toggle on.</p>
+
+    <h4>Phase 3 · Weeks 5–6 — Line-list inference</h4>
+    <p>CSV/XLSX import, grammar induction, confusion-weighted resolution, three-band confidence UI. This is the accuracy payload — the phase where "unable to find the line number" stops being the common outcome.</p>
+
+    <h4>Phase 4 · Weeks 7–8 — Learning loop</h4>
+    <p>Corrections log, derived confusion cost matrix, tag priors, export/import for team sharing. Migrates existing saved corrections rather than discarding them.</p>
+
+    <h4>Phase 5 · Weeks 9–10 — Transformer tier</h4>
+    <p>TrOCR-small-printed via transformers.js/WebGPU as a Tier-B re-reader, behind a feature flag, measured against the Phase 1 eval set.</p>
+
+    <div class="note">
+      <span class="label">Kill criterion · Phase 5</span>
+      <p>This is the highest-risk item and the one I'd cut first. It ships only if it clears <strong>+3 percentage points of tag recall on the eval set, with no first-pass regression beyond 2s per sheet, and a model download under 40MB.</strong> If it misses any of those, we keep the weights off and bank the phase as a documented negative result. By that point Phases 1–4 have already delivered every objective in the brief; Phase 5 is upside, not load-bearing.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="gutter">Ref. 06<br>Risks</div>
+  <div class="col">
+    <h2>Principal risks</h2>
+  </div>
+  <div class="breakout">
+    <div class="scroller">
+      <table>
+        <caption>Risk register</caption>
+        <thead>
+          <tr><th>Risk</th><th>Sev.</th><th>Mitigation</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Region detection discards real text as line art — a silent recall loss, the worst failure mode here</td>
+            <td><span class="pill hi">High</span></td>
+            <td>Full-sheet fallback stays available per page; eval harness gates the merge on recall, not speed; ship behind a flag for one phase before it becomes the default</td>
+          </tr>
+          <tr>
+            <td>WebGPU unavailable or slow on users' actual hardware</td>
+            <td><span class="pill med">Med</span></td>
+            <td>Tier B is optional by construction; WASM fallback path; hardware survey before Phase 5 starts</td>
+          </tr>
+          <tr>
+            <td>Line lists are stale or partial, so inference resolves toward tags that no longer exist</td>
+            <td><span class="pill med">Med</span></td>
+            <td>Grammar-valid-but-unlisted reads surface as Ambiguous rather than being forced to a listed tag; import shows list date and coverage</td>
+          </tr>
+          <tr>
+            <td>Hosted deployment rejected, keeping the tool on <code>file://</code></td>
+            <td><span class="pill med">Med</span></td>
+            <td>Cache degrades to session-only; all other gains survive intact. Worth resolving early — it's the one open dependency</td>
+          </tr>
+          <tr>
+            <td>Refactor destabilises a tool people rely on daily</td>
+            <td><span class="pill lo">Low</span></td>
+            <td>Current <code>index.html</code> stays deployed and untouched until the eval set shows parity or better</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="gutter">Ref. 07<br>Decisions</div>
+  <div class="col">
+    <h2>What I need from you</h2>
+    <ol>
+      <li><strong>Hosted deployment — approve or reject.</strong> GitHub Pages or an internal static host. It's still zero-install for users, and it's what makes caching and saved corrections reliable. This is the only genuine dependency in Phase 1.</li>
+      <li><strong>A dozen representative sheets with known-correct tags.</strong> The eval set. Worst scans you have, not the best — the good ones already work. This gates every accuracy claim in the programme, mine included.</li>
+      <li><strong>One line list export</strong> in whatever form it comes out of your system, so Phase 3 is built against the real format rather than an assumed one.</li>
+    </ol>
+    <p>With those three, Phase 1 starts immediately — and the speed problem, which is the one costing you time every day, is resolved inside two weeks regardless of how the rest lands.</p>
+  </div>
+
+  <footer>
+    <span>PDFREEDY · Vision pipeline proposal</span>
+    <span>Rev. A · For approval</span>
+    <span>10 weeks · 5 phases</span>
+  </footer>
+</section>
+
+</div>
+</body>
+</html>
