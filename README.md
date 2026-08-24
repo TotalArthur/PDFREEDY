@@ -36,12 +36,37 @@ test-fixture patterns, but check `git status` before you commit anyway.
 - **Substring by default** — `11004` matches `PT-11004`, `11004-A`, and so on.
 - **Formatting-insensitive** — spaces, dashes, slashes and case are ignored on both
   sides, so `11-004` finds `11004`.
+- **Glyph-confusion tolerant** — the big one. See below.
 - **Exact match** toggle for strict whole-string matching.
-- **Fuzzy (OCR only)** toggle uses Levenshtein distance to surface near-misses when OCR
-  has garbled a tag. Off by default, because guesses shouldn't look like certainties.
+- **Fuzzy** toggle uses Levenshtein distance to surface near-misses. Off by default,
+  because guesses shouldn't look like certainties.
 
 Matches are badged `TEXT` (real PDF text, reliable) or `OCR` (recognised from pixels,
-verify it), with the OCR confidence shown.
+verify it), with the OCR confidence shown. A `GLYPH` badge means the match came through
+confusable characters, and a `FUZZY` badge means it came through edit distance — both
+are cues to check the crop.
+
+### Glyph-confusion matching
+
+The dominant reason a tag isn't found is not that OCR missed the text — it's that OCR
+read it with characters it cannot physically distinguish. In the stroke-thin dot-matrix
+font used for CAD callouts, at drawing scale, these pairs are near-identical:
+
+| | | | | | | |
+|---|---|---|---|---|---|---|
+| `0` `O` `Q` `D` | `1` `I` `L` | `2` `Z` | `5` `S` | `6` `G` | `8` `B` | `7` `T` |
+
+So `V-6801-15PW4/3-750-PP60-RE1` gets read as `V-68O1-l5PW4/3-75O-PPGO-RE1`, and a plain
+substring search finds nothing — even though every "wrong" character is one no OCR engine
+could have got right.
+
+Rather than folding both sides to a canonical form (which would destroy precision — `GP`
+and `6P` would collide), the query is compared against the candidate position by position,
+and a mismatch is permitted **only** where the two characters share a confusion class,
+within a substitution budget. Everything else must still match exactly. So the garbled
+read above is found, while `PT-11005` still does not match `PT-11004`.
+
+Queries shorter than 4 characters are never confusion-matched.
 
 ---
 
@@ -58,6 +83,31 @@ Per page, on load:
 3. **Lazy and cancellable.** The visible page is processed first, then the rest in the
    background, so you can search finished pages while later ones are still running.
    Per-page progress is live, with **Skip page** and **Cancel** controls.
+
+### Before OCR runs: adaptive binarization
+
+A P&ID is thin dark strokes on white, but antialiasing at render time turns every 1px CAD
+stroke into a soft grey smear, and scanned sheets add uneven illumination on top. A single
+global cutoff for the whole sheet then either thickens characters until their counters
+fill in (`8`→`B`, `6`→`G`) or thins them until strokes break (`5`→`S`) — manufacturing the
+very confusions above.
+
+Each pixel is instead thresholded against the mean of its own neighbourhood, computed as a
+separable box filter (two O(1)-per-pixel passes, two bytes per pixel — a full integral
+image would need hundreds of MB on an A1 sheet at OCR scale). On the synthetic
+uneven-illumination sheet in `tests/preprocess.test.js`, the best threshold that
+*could exist* globally recovers 40% of strokes; the adaptive pass recovers 100%.
+
+Thumbnails keep the clean render — only the copy handed to Tesseract is binarized.
+
+### Rotated and vertical text
+
+With **Also scan rotated/vertical text** on, each page is OCR'd at 0°/90°/180°/270° and
+word boxes are mapped back into page space. Ordering and word-joining are then done along
+the axis the text is *read*, not along page-x: for the 90/180/270 passes a word's reading
+order maps onto a decreasing or perpendicular page axis, so sorting by page-x scrambles
+the words of every rotated tag before they are ever joined. `tests/matching.test.js`
+pins this down and keeps a regression guard proving page-x sorting is wrong.
 
 Results are cached in memory for the session. Re-opening the same file re-runs OCR —
 `file://` storage behaves inconsistently across browsers, so it isn't worth the
@@ -133,3 +183,18 @@ also makes `localStorage` (and therefore saved corrections) reliable.
 - [tesseract.js](https://tesseract.projectnaptha.com/) — OCR
 
 Both loaded from jsDelivr; there is nothing to install.
+
+
+---
+
+## Tests
+
+Pure-logic tests for the parts that decide whether a tag is found. They lift the functions
+straight out of `index.html` by name — no build step, no bundler, no dependencies:
+
+```
+node tests/matching.test.js     # confusion matching + rotated reading axis
+node tests/preprocess.test.js   # adaptive binarization vs a global threshold
+```
+
+Both exit non-zero on failure.

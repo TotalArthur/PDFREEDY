@@ -192,6 +192,7 @@
   .badge-text { background: #274a2e; color: var(--good); }
   .badge-ocr { background: #4a3d1c; color: var(--warn); }
   .badge-fuzzy { background: #3a2440; color: #c58cf0; }
+  .badge-confused { background: #3d3218; color: #e8bf5a; }
   .badge-fixed { background: #123a3f; color: #4fd8e6; }
   .badge-page { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
   .result-text { font-family: var(--mono); font-size: 13px; word-break: break-word; }
@@ -312,7 +313,7 @@
         </div>
         <div class="search-options">
           <label><input type="checkbox" id="exactToggle"> Exact match</label>
-          <label><input type="checkbox" id="fuzzyToggle"> Fuzzy (OCR only)</label>
+          <label><input type="checkbox" id="fuzzyToggle"> Fuzzy (last-resort, may over-match)</label>
         </div>
         <div id="searchSummary"></div>
       </div>
@@ -464,6 +465,7 @@
   const OCR_SCALE = 3.5;               // render scale used for OCR passes (landscape-only by default, so there's headroom for a sharper single pass)
   const TEXT_LEN_THRESHOLD = 20;       // page text length above which we skip OCR
   const JOIN_GAP_FACTOR = 2.2;         // how close adjacent items/words must be to join into a window
+  const MAX_WINDOW = 6;                // max consecutive items/words joined when testing a match
 
   // =======================================================================
   // Utility
@@ -476,6 +478,96 @@
   }
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // =======================================================================
+  // Confusion-tolerant matching
+  //
+  // The dominant OCR failure mode on CAD drawings isn't "text not found", it's
+  // glyph confusion: the stroke-thin dot-matrix font used for tag callouts
+  // renders 0 and O, 1 and I/l, 5 and S, 8 and B, 6 and G, 2 and Z almost
+  // identically at drawing scale. A raw substring search therefore misses
+  // V-6801-15PW11 when Tesseract reported V-68O1-l5PW11 — even though every
+  // character it got "wrong" is one it cannot physically distinguish.
+  //
+  // Instead of blanket-folding both sides to a canonical form (which destroys
+  // specificity — GP and 6P would collide), we compare the query against the
+  // candidate position by position and permit a mismatch ONLY when the two
+  // characters belong to the same confusion class. A candidate must still match
+  // the query exactly everywhere else, so precision stays high while the
+  // known-ambiguous glyph pairs stop causing misses.
+  // =======================================================================
+  const CONFUSION_CLASSES = ['0OQD', '1IL', '2Z', '5S', '6G', '8B', '7T', '4A'];
+  const CONFUSION_OF = (() => {
+    const m = new Map();
+    CONFUSION_CLASSES.forEach((cls, i) => { for (const ch of cls) m.set(ch, i); });
+    return m;
+  })();
+
+  // Same character, or two glyphs OCR genuinely cannot tell apart.
+  function charsConfusable(a, b) {
+    if (a === b) return true;
+    const ca = CONFUSION_OF.get(a);
+    return ca !== undefined && ca === CONFUSION_OF.get(b);
+  }
+
+  // Substitution budget: generous enough for a badly-garbled read, tight enough
+  // that a short query can't match half the drawing. Exact matches cost nothing.
+  function confusionBudget(len) {
+    if (len < 4) return 0;                        // too short to risk it
+    return Math.max(1, Math.round(len * 0.34));
+  }
+
+  // Find `needle` inside `hay` allowing only confusion-class substitutions.
+  // Returns { pos, subs } for the best (fewest-substitutions) hit, or null.
+  function confusableIndexOf(hay, needle) {
+    const n = needle.length, budget = confusionBudget(n);
+    if (!n || n > hay.length || budget === 0) return null;
+    let best = null;
+    for (let start = 0; start + n <= hay.length; start++) {
+      let subs = 0, ok = true;
+      for (let k = 0; k < n; k++) {
+        const a = hay[start + k], b = needle[k];
+        if (a === b) continue;
+        if (!charsConfusable(a, b) || ++subs > budget) { ok = false; break; }
+      }
+      if (ok && (!best || subs < best.subs)) {
+        best = { pos: start, subs };
+        if (subs === 0) break;
+      }
+    }
+    return best;
+  }
+
+  // Single entry point for "does this candidate window satisfy the query?".
+  // Tried in order of decreasing confidence: exact -> confusion -> fuzzy.
+  // Returns null, or { pos, len, confused, fuzzy } describing how it matched.
+  function matchWindow(norm, query) {
+    if (!norm || !query.norm) return null;
+    const q = query.norm;
+
+    if (query.exact) {
+      if (norm === q) return { pos: 0, len: norm.length, confused: false, fuzzy: false };
+      if (norm.length === q.length) {
+        const hit = confusableIndexOf(norm, q);
+        if (hit) return { pos: 0, len: norm.length, confused: hit.subs > 0, fuzzy: false };
+      }
+      return null;
+    }
+
+    const exactPos = norm.indexOf(q);
+    if (exactPos !== -1) return { pos: exactPos, len: q.length, confused: false, fuzzy: false };
+
+    const hit = confusableIndexOf(norm, q);
+    if (hit) return { pos: hit.pos, len: q.length, confused: true, fuzzy: false };
+
+    if (query.fuzzy) {
+      const maxDist = q.length <= 4 ? 1 : 2;
+      if (Math.abs(norm.length - q.length) <= maxDist && levenshtein(norm, q) <= maxDist) {
+        return { pos: 0, len: norm.length, confused: false, fuzzy: true };
+      }
+    }
+    return null;
+  }
 
   // =======================================================================
   // OCR corrections ("teach it the right answer")
@@ -804,7 +896,7 @@
 
     for (const line of data.lineGroups) {
       const covered = new Set();
-      for (let winSize = 1; winSize <= 3; winSize++) {
+      for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
         for (let start = 0; start + winSize <= line.length; start++) {
           const windowEntries = line.slice(start, start + winSize);
           const idxs = windowEntries.map(e => e.idx);
@@ -825,13 +917,17 @@
           const norm = normalize(text);
           if (!norm) continue;
 
-          const isMatch = query.exact ? (norm === query.norm) : norm.includes(query.norm);
-          if (!isMatch) continue;
+          // A PDF text layer is not automatically trustworthy: drawings that were
+          // scanned and re-OCR'd upstream carry a text layer with exactly the same
+          // glyph confusions as our own OCR, so it gets the same matcher.
+          const m = matchWindow(norm, query);
+          if (!m) continue;
 
           idxs.forEach(i => covered.add(i));
           results.push({
             page: pageNum, source: 'text', text: text,
-            itemIndices: idxs, confidence: null, fuzzy: false
+            itemIndices: idxs, confidence: null,
+            fuzzy: m.fuzzy, confused: m.confused, matchPos: m.pos, matchLen: m.len
           });
         }
       }
@@ -856,11 +952,105 @@
         // Narrowing the character set cuts down on stray-symbol noise (stuff
         // like "=", "©", "•" picked up from line art) and measurably helps
         // both accuracy and decoding speed for tag-style text.
+        // Uppercase only. Every comparison in this tool runs through normalize(),
+        // which upper-cases anyway, so a lowercase alphabet can never help a match
+        // — it only gives the decoder extra ways to be wrong (picking 'l' over '1',
+        // 'o' over '0'). Removing it strictly shrinks the error space.
         tessedit_char_whitelist:
-          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-/.,:()#&+ ",
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,:()#&+ ",
+        // Tag callouts are standalone strings, not prose — Tesseract's built-in
+        // English dictionary can only drag a correct read toward a real word.
+        load_system_dawg: '0',
+        load_freq_dawg: '0',
       });
     }
     return ocrWorker;
+  }
+
+  // =======================================================================
+  // Pre-OCR image conditioning
+  //
+  // A P&ID renders as thin dark strokes on white with almost no mid-tones, but
+  // antialiasing at render time turns every 1px CAD stroke into a soft grey
+  // smear. Tesseract's own global (Otsu) threshold then has to pick one cutoff
+  // for the whole sheet, which either thickens characters until counters fill
+  // in (8 -> B, 6 -> G) or thins them until strokes break (5 -> S).
+  //
+  // Local adaptive thresholding picks a cutoff per pixel from the mean of its
+  // neighbourhood, computed in O(1) per pixel from an integral image. Character
+  // strokes stay crisp regardless of what surrounds them, which is exactly the
+  // condition the confusion classes above arise from.
+  // =======================================================================
+  function preprocessForOcr(srcCanvas) {
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const ctx = srcCanvas.getContext('2d', { willReadFrequently: true });
+    let img;
+    try {
+      img = ctx.getImageData(0, 0, w, h);
+    } catch (err) {
+      console.warn('Preprocessing skipped (canvas read failed):', err);
+      return srcCanvas;
+    }
+    const px = img.data;
+    const n = w * h;
+
+    // Luminance plane (integer weights ~ Rec.601).
+    const grey = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      grey[i] = (px[j] * 77 + px[j+1] * 151 + px[j+2] * 28) >> 8;
+    }
+
+    // Window sized to a few character heights at OCR_SCALE, and bounded so the
+    // cost stays predictable on very large sheets.
+    const radius = clamp(Math.round(Math.min(w, h) / 90), 6, 60);
+    // Bias below the local mean so the antialiasing halo around a stroke is
+    // dropped rather than fattening the stroke it surrounds.
+    const BIAS = 0.90;
+
+    // The mean over a square window is separable: a horizontal box mean followed
+    // by a vertical one. Done this way it costs two O(1)-per-pixel passes and two
+    // byte-per-pixel buffers. (A full integral image would be simpler to write,
+    // but needs a float per pixel — several hundred MB on an A1 sheet rendered
+    // at OCR_SCALE, which is exactly the size of drawing this tool is for.)
+    const hmean = new Uint8Array(n);
+    const rowPrefix = new Uint32Array(w + 1);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) rowPrefix[x+1] = rowPrefix[x] + grey[row + x];
+      for (let x = 0; x < w; x++) {
+        const x0 = x - radius < 0 ? 0 : x - radius;
+        const x1 = x + radius >= w ? w - 1 : x + radius;
+        hmean[row + x] = (rowPrefix[x1+1] - rowPrefix[x0]) / (x1 - x0 + 1);
+      }
+    }
+
+    // Vertical pass as a sliding window over whole rows, so memory access stays
+    // sequential (a per-column walk over a 50-megapixel buffer thrashes cache).
+    const colSum = new Uint32Array(w);
+    let top = 0, bottom = -1;
+    const addRow = (y) => { const r = y * w; for (let x = 0; x < w; x++) colSum[x] += hmean[r + x]; };
+    const subRow = (y) => { const r = y * w; for (let x = 0; x < w; x++) colSum[x] -= hmean[r + x]; };
+
+    for (let y = 0; y < h; y++) {
+      const wantTop = y - radius < 0 ? 0 : y - radius;
+      const wantBottom = y + radius >= h ? h - 1 : y + radius;
+      while (bottom < wantBottom) addRow(++bottom);
+      while (top < wantTop) subRow(top++);
+      const count = bottom - top + 1;
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const i = row + x;
+        const v = grey[i] < (colSum[x] / count) * BIAS ? 0 : 255;
+        const j = i * 4;
+        px[j] = px[j+1] = px[j+2] = v;
+        px[j+3] = 255;
+      }
+    }
+
+    const out = document.createElement('canvas');
+    out.width = w; out.height = h;
+    out.getContext('2d').putImageData(img, 0, 0);
+    return out;
   }
 
   function rotateCanvas(srcCanvas, degrees) {
@@ -896,6 +1086,17 @@
     return [x, y];
   }
 
+  // Project a page-space box onto the axis the text runs along for this pass, so
+  // ordering and gap tests are one piece of rotation-independent arithmetic:
+  //   rs/re = start/end along the reading direction (always increasing)
+  //   rh    = character height, measured perpendicular to that direction
+  function readingAxis(b, degrees) {
+    if (degrees === 90)  return { rs: -b.y1, re: -b.y0, rh: b.x1 - b.x0 };
+    if (degrees === 180) return { rs: -b.x1, re: -b.x0, rh: b.y1 - b.y0 };
+    if (degrees === 270) return { rs:  b.y0, re:  b.y1, rh: b.x1 - b.x0 };
+    return { rs: b.x0, re: b.x1, rh: b.y1 - b.y0 };
+  }
+
   function mapBoxBack(bbox, degrees, W, H) {
     const corners = [
       [bbox.x0, bbox.y0], [bbox.x1, bbox.y0], [bbox.x1, bbox.y1], [bbox.x0, bbox.y1]
@@ -916,8 +1117,12 @@
     const baseCtx = base.getContext('2d');
     await page.render({ canvasContext: baseCtx, viewport }).promise;
 
+    // Thumbnails show the real drawing, so they keep the clean render; only the
+    // copy handed to Tesseract is binarized.
     data.thumbCanvas = base;
     data.thumbScale = OCR_SCALE;
+
+    const ocrBase = preprocessForOcr(base);
 
     const W = base.width, H = base.height;
     // Landscape-only by default: a single pass at the page's native orientation
@@ -932,7 +1137,7 @@
       const deg = rotations[i];
       onProgress(i+1, rotations.length);
 
-      const rotated = deg === 0 ? base : rotateCanvas(base, deg);
+      const rotated = deg === 0 ? ocrBase : rotateCanvas(ocrBase, deg);
       let result;
       try {
         result = await worker.recognize(rotated);
@@ -947,10 +1152,18 @@
           const text = (w.text || '').trim();
           if (!text) continue;
           const mapped = mapBoxBack(w.bbox, deg, W, H);
-          mappedWords.push({ text, bbox: mapped, confidence: w.confidence, rotation: deg });
+          mappedWords.push({
+            text, bbox: mapped, confidence: w.confidence, rotation: deg,
+            ...readingAxis(mapped, deg)
+          });
         }
         if (mappedWords.length) {
-          mappedWords.sort((a,b) => a.bbox.x0 - b.bbox.x0);
+          // Sort along the direction the text is READ, not along page-x. For the
+          // 90/180/270 passes a word's reading order maps to a decreasing or
+          // perpendicular axis once its box is projected back into page space, so
+          // sorting by x0 (as a horizontal-only reader would) silently scrambles
+          // the words of every rotated tag before they are ever joined.
+          mappedWords.sort((a,b) => a.rs - b.rs);
           allWords.push({ rotation: deg, words: mappedWords });
         }
       }
@@ -968,7 +1181,7 @@
     for (const line of data.ocrLines) {
       const words = line.words;
       const covered = new Set();
-      for (let winSize = 1; winSize <= 3; winSize++) {
+      for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
         for (let start = 0; start + winSize <= words.length; start++) {
           const win = words.slice(start, start + winSize);
           const wIdxs = win.map((_,k) => start+k);
@@ -978,9 +1191,10 @@
             let tooFar = false;
             for (let k=0;k<win.length-1;k++) {
               const a = win[k], b = win[k+1];
-              const gap = b.bbox.x0 - a.bbox.x1;
-              const h = a.bbox.y1 - a.bbox.y0;
-              if (gap > h * JOIN_GAP_FACTOR) { tooFar = true; break; }
+              // Measured along the reading axis, so this is the true inter-word
+              // gap for vertical and upside-down text as well as horizontal.
+              const gap = b.rs - a.re;
+              if (gap > a.rh * JOIN_GAP_FACTOR) { tooFar = true; break; }
             }
             if (tooFar) continue;
           }
@@ -993,16 +1207,8 @@
           const norm = normalize(text);
           if (!norm) continue;
 
-          let isMatch = query.exact ? (norm === query.norm) : norm.includes(query.norm);
-          let fuzzy = false;
-          if (!isMatch && query.fuzzy) {
-            const maxDist = query.norm.length <= 4 ? 1 : 2;
-            if (Math.abs(norm.length - query.norm.length) <= maxDist) {
-              isMatch = levenshtein(norm, query.norm) <= maxDist;
-              fuzzy = isMatch;
-            }
-          }
-          if (!isMatch) continue;
+          const m = matchWindow(norm, query);
+          if (!m) continue;
 
           wIdxs.forEach(i => covered.add(i));
           const b = boundsOfPoints(win.flatMap(w => [[w.bbox.x0,w.bbox.y0],[w.bbox.x1,w.bbox.y1]]));
@@ -1011,7 +1217,8 @@
             page: pageNum, source: 'ocr', text, rawText,
             corrected: !!fixed,
             bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
-            confidence: avgConf, fuzzy
+            confidence: avgConf,
+            fuzzy: m.fuzzy, confused: m.confused, matchPos: m.pos, matchLen: m.len
           });
         }
       }
@@ -1263,6 +1470,7 @@
       topRow.innerHTML =
         '<span class="badge badge-page">Page ' + res.page + '</span>' +
         '<span class="badge ' + (res.source==='text' ? 'badge-text' : 'badge-ocr') + '">' + (res.source==='text'?'TEXT':'OCR') + '</span>' +
+        (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) — check the crop">GLYPH</span>' : '') +
         (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : '') +
         (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : '');
       if (res.source === 'ocr') {
@@ -1280,7 +1488,7 @@
 
       const textEl = document.createElement('div');
       textEl.className = 'result-text';
-      textEl.innerHTML = highlightMatch(res.text, currentQuery.norm);
+      textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
       meta.appendChild(textEl);
 
       if (res.source === 'ocr') {
@@ -1344,19 +1552,19 @@
     });
   }
 
-  function highlightMatch(text, normQuery) {
-    if (!normQuery) return escapeHtml(text);
-    const norm = normalize(text);
-    const pos = norm.indexOf(normQuery);
-    if (pos === -1) return escapeHtml(text);
-    // map normalized index back to raw text index (approx: normalize strips a small fixed set of chars,
-    // so walk raw text counting only kept characters)
+  // The matcher already knows where in the NORMALIZED string it matched — which
+  // it has to, since a confusion match has no findable substring to search for.
+  // Walk the raw text counting only the characters normalize() keeps, to map
+  // that normalized span back onto the original text for display.
+  function highlightMatch(text, pos, len) {
+    if (typeof pos !== 'number' || !len) return escapeHtml(text);
     let rawStart = -1, rawEnd = -1, keptCount = 0;
     for (let i=0;i<text.length;i++) {
-      const isStripped = /[\s\-_.]/.test(text[i]);
-      if (!isStripped) {
+      // Must mirror normalize() exactly: it keeps A-Z0-9 and drops all else.
+      const isKept = /[A-Za-z0-9]/.test(text[i]);
+      if (isKept) {
         if (keptCount === pos) rawStart = i;
-        if (keptCount === pos + normQuery.length - 1) { rawEnd = i+1; break; }
+        if (keptCount === pos + len - 1) { rawEnd = i+1; break; }
         keptCount++;
       }
     }
