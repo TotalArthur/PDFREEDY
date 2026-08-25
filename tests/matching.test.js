@@ -46,6 +46,38 @@ for (const [read, tag, want] of cases) {
   console.log(`  ${(!!m === want) ? 'ok  ' : 'BAD '} ${read.padEnd(30)} vs ${tag.padEnd(28)} -> ${m ? 'match (confused=' + m.confused + ')' : 'no match'}`);
 }
 
+// ---------------------------------------------------------------------------
+section('Dropped characters: what blur actually does to a tag');
+// Every one of these is a real read from bench/eval.mjs. The old matcher
+// compared position by position at a fixed length and could only substitute, so
+// all of them were invisible to it — the read is SHORTER than the query, which
+// defeats plain substring search too.
+const dropped = [
+  ['FC2015',           'FIC-2015',           true,  'lost the I'],
+  ['X-3308',           'XV-3308',            true,  'lost the V'],
+  ['TSH 6802',         'TSHH-6802',          true,  'lost an H'],
+  ['-P-1052-A1A-HC',   '6"-P-1052-A1A-HC',   true,  'lost the leading 6"'],
+  ['V-B80115PWA',      'V-6801-15PW4',       true,  '6->B and 4->A'],
+  ['LT-41004',         'LT-11004',           true,  '1->4'],
+  // Precision: a deletion must not become a back door for a substitution the
+  // confusion table forbids. The two edge cases below are the ones that matter
+  // — a trailing or leading delete plus the free prefix/suffix of a substring
+  // search would otherwise let any tag match its neighbour.
+  //
+  // A mid-string deletion is a different matter: PT-1104 really could be a
+  // different tag, and it will now match a search for PT-11004. That is the
+  // cost of finding tags whose characters blur away, and it is why every hit
+  // that needed damage to match is badged rather than presented as fact.
+  ['PT-11005',         'PT-11004',           false, 'trailing char differs, not missing'],
+  ['XT-11004',         'PT-11004',           false, 'leading char differs, not missing'],
+  ['PT-1104',          'PT-11004',           true,  'lost a 0 mid-string'],
+];
+for (const [read, tag, want, why] of dropped) {
+  const m = M.matchWindow(M.normalize(read), Q(tag));
+  check(`${read} ~ ${tag} (${why})`, !!m === want);
+  console.log(`  ${(!!m === want) ? 'ok  ' : 'BAD '} ${read.padEnd(18)} vs ${tag.padEnd(20)} -> ${m ? `match (cost ${m.cost.toFixed(2)}, ${m.subs} subs, ${m.indels} indel)` : 'no match'}`);
+}
+
 section('Confusion matching: precision guards');
 check('two-char query is never confusion-matched', !M.matchWindow(M.normalize('GP'), Q('6P')));
 check('substitution budget rejects all-different string',

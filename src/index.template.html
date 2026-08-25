@@ -214,6 +214,32 @@
     background: var(--accent); color: #08131f; font-weight: 600;
   }
   .fix-row button.cancel { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
+  /* Confidence bands: a match that needed damage to land must not look like
+     one that didn't. */
+  .band-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 6px 6px; font-size: 11px; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim);
+  }
+  .band-head .band-title { flex: 1; min-width: 0; }
+  .band-head .band-count {
+    background: var(--panel-2); border-radius: 9px; padding: 1px 7px;
+    font-size: 10.5px; letter-spacing: 0; color: var(--text-dim);
+  }
+  .band-confirmed .band-title { color: #6ee7a8; }
+  .band-likely .band-title { color: #e8bf5a; }
+  .band-possible .band-title { color: #c58cf0; }
+  .band-note {
+    color: var(--text-dim); font-size: 11.5px; line-height: 1.5;
+    padding: 0 6px 8px;
+  }
+  .band-collapse > summary { list-style: none; cursor: pointer; }
+  .band-collapse > summary::-webkit-details-marker { display: none; }
+  .band-collapse > summary .band-head::after {
+    content: '▸'; color: var(--text-dim); font-size: 12px;
+  }
+  .band-collapse[open] > summary .band-head::after { content: '▾'; }
+
   .empty-note { color: var(--text-dim); font-size: 12.5px; padding: 10px 6px; line-height: 1.5; }
   #correctionsBar {
     font-size: 11px; color: var(--text-dim); padding: 6px 14px;

@@ -10,7 +10,32 @@
  */
 import { createCanvas } from '@napi-rs/canvas';
 
-export function renderTag(text, { height = 28, blur = 0, noise = 0, pad = 16 } = {}) {
+/*
+ * Deterministic noise.
+ *
+ * The first version of this used Math.random(), and the same pipeline scored
+ * 68% and 74% on consecutive runs — a six-point swing that is larger than most
+ * of the changes being measured. Every number was reporting the seed. Noise is
+ * now seeded from the tag and the condition, so a run is reproducible and two
+ * pipelines see pixel-identical input.
+ */
+function seedFrom(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function mulberry32(seed) {
+  let a = seed;
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function renderTag(text, { name = '', height = 28, blur = 0, noise = 0, pad = 16, uneven = 0 } = {}) {
+  const rand = mulberry32(seedFrom(text + '|' + name + '|' + height + '|' + blur + '|' + noise + '|' + uneven));
   const font = `${height}px sans-serif`;
   const probe = createCanvas(8, 8).getContext('2d');
   probe.font = font;
@@ -32,12 +57,30 @@ export function renderTag(text, { height = 28, blur = 0, noise = 0, pad = 16 } =
     bc.filter = `blur(${blur}px)`;
     bc.drawImage(sharp, 0, 0);
   }
+  // An illumination gradient across the crop: the condition the adaptive
+  // binarizer exists for, and the one the tool cannot see if every fixture is
+  // evenly lit. Applied last so it dims strokes and paper together, exactly as
+  // a lamp or a curled page does.
+  if (uneven > 0) {
+    const ctx = out.getContext('2d');
+    const img = ctx.getImageData(0, 0, w, h);
+    const d = img.data;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const shade = 1 - uneven * (x / w);
+        const v = Math.max(0, Math.min(255, d[i] * shade));
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
   if (noise > 0) {
     const ctx = out.getContext('2d');
     const img = ctx.getImageData(0, 0, w, h);
     const d = img.data;
     for (let i = 0; i < d.length; i += 4) {
-      const v = Math.max(0, Math.min(255, d[i] + (Math.random() - 0.5) * noise));
+      const v = Math.max(0, Math.min(255, d[i] + (rand() - 0.5) * noise));
       d[i] = d[i + 1] = d[i + 2] = v;
     }
     ctx.putImageData(img, 0, 0);

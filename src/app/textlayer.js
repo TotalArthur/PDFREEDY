@@ -110,7 +110,8 @@ function searchTextLayer(pageNum, query) {
         page: pageNum, source: 'text', text: hit.text,
         itemIndices: hit.items.map(it => it.key), confidence: null,
         fuzzy: hit.match.fuzzy, confused: hit.match.confused,
-        matchPos: hit.match.pos, matchLen: hit.match.len
+        matchPos: hit.match.pos, matchLen: hit.match.len,
+        cost: hit.match.cost, subs: hit.match.subs, indels: hit.match.indels
       });
     }
   }

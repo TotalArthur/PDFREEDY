@@ -23,6 +23,10 @@ const S = {
   isBackgroundRunning: false,
   currentQuery: { raw: '', norm: '', exact: false, fuzzy: false },
   tickerHandle: null,
+  // Set when a search found nothing on the cheap pass and only turned results
+  // up once the matcher was allowed to absorb dropped characters. Those hits
+  // are worth surfacing but not worth presenting as certainties.
+  deepSearchUsed: false,
 };
 
 export { S };

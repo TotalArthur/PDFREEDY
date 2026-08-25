@@ -28,11 +28,24 @@ function searchPage(pageNum, query) {
   return results;
 }
 
+function searchablePages() {
+  const pages = [];
+  for (let p = 1; p <= S.numPages; p++) {
+    const d = S.pageData.get(p);
+    if (!d) continue;
+    if (d.status === 'text-done' || d.status === 'ocr-done' || d.status === 'skipped') pages.push(p);
+  }
+  return pages;
+}
+
 function runFullSearch() {
   const raw = searchInput.value.trim();
   S.currentQuery = {
     raw, norm: normalize(raw),
-    exact: exactToggle.checked, fuzzy: fuzzyToggle.checked
+    exact: exactToggle.checked, fuzzy: fuzzyToggle.checked,
+    // First pass allows only substitutions, which is roughly ten times cheaper
+    // than the full alignment. See below for when that gets lifted.
+    allowIndels: false,
   };
   if (!S.currentQuery.norm) {
     S.lastResults = [];
@@ -41,12 +54,28 @@ function runFullSearch() {
     drawHighlights();
     return;
   }
-  S.lastResults = [];
-  for (let p=1;p<=S.numPages;p++) {
-    const d = S.pageData.get(p);
-    if (!d || (d.status !== 'text-done' && d.status !== 'ocr-done' && d.status !== 'skipped')) continue;
-    S.lastResults.push(...searchPage(p, S.currentQuery));
+
+  const pages = searchablePages();
+  const collect = () => {
+    const out = [];
+    for (const p of pages) out.push(...searchPage(p, S.currentQuery));
+    return out;
+  };
+
+  S.lastResults = collect();
+
+  // Nothing found. Before telling the user the tag isn't there, try harder:
+  // allow the alignment to absorb characters that blur erased entirely, which
+  // is the commonest way a real tag goes missing (a dropped I, V or leading
+  // digit). Only a failed search pays for this.
+  if (!S.lastResults.length) {
+    S.currentQuery.allowIndels = true;
+    S.lastResults = collect();
+    S.deepSearchUsed = S.lastResults.length > 0;
+  } else {
+    S.deepSearchUsed = false;
   }
+
   S.activeResultIndex = -1;
   renderResultsList();
   updateSearchSummary();
@@ -70,6 +99,7 @@ function updateSearchSummary() {
     if (!['text-done','ocr-done','skipped','error'].includes(d.status)) pagesUnprocessed.push(p);
   }
   let msg = S.lastResults.length + ' match' + (S.lastResults.length===1?'':'es') + ' found so far';
+  if (S.deepSearchUsed) msg += ' — nothing matched exactly, so these allow for characters OCR lost entirely. Check the crops.';
   if (pagesUnprocessed.length) msg += ' (' + pagesUnprocessed.length + ' page' + (pagesUnprocessed.length===1?'':'s') + ' still processing — results will keep appearing)';
   searchSummary.textContent = msg;
   resultsCount.textContent = S.lastResults.length + ' result' + (S.lastResults.length===1?'':'s');

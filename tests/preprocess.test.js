@@ -7,7 +7,8 @@
  *
  *   node tests/preprocess.test.js
  */
-import { preprocessForOcr, setCanvasFactory } from '../src/lib/preprocess.js';
+import { preprocessForOcr, conditionForOcr, illuminationSpread, setCanvasFactory, UNEVEN_FLOOR }
+  from '../src/lib/preprocess.js';
 
 const W = 400, H = 300;
 const out = {};
@@ -70,8 +71,33 @@ console.log(`global   : precision=${(best.p*100).toFixed(1)}%  recall=${(best.r*
 console.log(`\nF1 adaptive=${f1Adaptive.toFixed(3)}  vs  F1 best-global=${best.f1.toFixed(3)}`);
 
 let fail = 0;
+
+// ---------------------------------------------------------------------------
+// Conditioning is chosen from the image, so the choice itself needs testing:
+// the measured cost of conditioning an evenly lit page is around nine points of
+// recall (bench/README.md), and this is what stops it happening.
+const greyOf = (c) => {
+  const d = c.raw, n = c.width * c.height, g = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) g[i] = (d[j]*77 + d[j+1]*151 + d[j+2]*28) >> 8;
+  return g;
+};
+const flat = mkCanvas(W, H, (d, w, h) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = isStrokeAt(x, y) ? 40 : 235;
+    const i = (y * w + x) * 4;
+    d[i] = d[i+1] = d[i+2] = v; d[i+3] = 255;
+  }
+});
+const flatSpread = illuminationSpread(greyOf(flat), W, H);
+const litSpread = illuminationSpread(greyOf(src), W, H);
+console.log(`\nillumination spread: evenly lit=${flatSpread.toFixed(3)}  gradient=${litSpread.toFixed(3)}  (cutoff ${UNEVEN_FLOOR})`);
+if (!(flatSpread < UNEVEN_FLOOR)) { console.log('FAIL: an evenly lit sheet was judged uneven'); fail++; }
+if (!(litSpread >= UNEVEN_FLOOR)) { console.log('FAIL: a gradient-lit sheet was judged even'); fail++; }
+if (conditionForOcr(flat, 'auto') !== flat) { console.log('FAIL: an evenly lit sheet should be handed to OCR untouched'); fail++; }
+if (conditionForOcr(src, 'auto') === src) { console.log('FAIL: a gradient-lit sheet should be conditioned'); fail++; }
+
 if (!(prec > 0.95)) { console.log('FAIL: adaptive precision too low'); fail++; }
 if (!(rec  > 0.95)) { console.log('FAIL: adaptive recall too low'); fail++; }
 if (!(f1Adaptive > best.f1)) { console.log('FAIL: no improvement over a global threshold'); fail++; }
-console.log(fail ? `\n${fail} failed` : '\nPASS: adaptive beats the best possible global threshold');
+console.log(fail ? `\n${fail} failed` : '\nPASS: adaptive beats the best possible global threshold, and conditioning is applied only where it is needed');
 process.exit(fail ? 1 : 0);

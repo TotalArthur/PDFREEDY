@@ -1,6 +1,6 @@
 import { S } from './state.js';
 import { findWindowMatches } from '../lib/windows.js';
-import { preprocessForOcr, rotateCanvas } from '../lib/preprocess.js';
+import { conditionForOcr, rotateCanvas } from '../lib/preprocess.js';
 import { mapBoxBack, readingAxis, boundsOfPoints } from '../lib/geometry.js';
 import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, TESSERACT_INIT, tesseractParams } from './config.js';
 import { getPageProxy } from './pdf.js';
@@ -41,7 +41,10 @@ async function runOcrForPage(pageNum, onProgress) {
   data.thumbCanvas = base;
   data.thumbScale = OCR_SCALE;
 
-  const ocrBase = preprocessForOcr(base);
+  // Conditioning is chosen from the image, not applied blindly. A crisp vector
+  // render thresholds well; a soft scan does not, and thresholding it destroys
+  // the very strokes OCR needs. See bench/README.md.
+  const ocrBase = conditionForOcr(base);
 
   const W = base.width, H = base.height;
   // Landscape-only by default: a single pass at the page's native orientation
@@ -115,7 +118,8 @@ function searchOcr(pageNum, query) {
         bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
         confidence: avgConf,
         fuzzy: hit.match.fuzzy, confused: hit.match.confused,
-        matchPos: hit.match.pos, matchLen: hit.match.len
+        matchPos: hit.match.pos, matchLen: hit.match.len,
+        cost: hit.match.cost, subs: hit.match.subs, indels: hit.match.indels
       });
     }
   }

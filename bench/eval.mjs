@@ -22,7 +22,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import { createWorker, PSM, OEM } from 'tesseract.js';
 import { normalize } from '../src/lib/text.js';
 import { findWindowMatches } from '../src/lib/windows.js';
-import { preprocessForOcr, setCanvasFactory } from '../src/lib/preprocess.js';
+import { conditionForOcr, setCanvasFactory } from '../src/lib/preprocess.js';
 import { JOIN_GAP_FACTOR, MAX_WINDOW, TESSERACT_INIT, tesseractParams } from '../src/app/config.js';
 import { TAGS, CONDITIONS } from './corpus.mjs';
 import { renderTag } from './render.mjs';
@@ -50,25 +50,40 @@ const PIPELINES = {
     label: 'shipped behaviour: dictionaries silently left ON, adaptive binarize',
     init: {},
     params: { ...BASE_PARAMS, load_system_dawg: '0', load_freq_dawg: '0' },
-    binarize: true,
+    mode: 'binarize',
+    allowIndels: false,
   },
   nodict: {
     label: 'dictionaries actually off (init config), adaptive binarize',
     init: TESSERACT_INIT,
     params: BASE_PARAMS,
-    binarize: true,
-  },
-  nodict_dpi: {
-    label: 'dictionaries off + user_defined_dpi fixed at 72*OCR_SCALE',
-    init: TESSERACT_INIT,
-    params: { ...BASE_PARAMS, user_defined_dpi: String(Math.round(72 * 3.5)) },
-    binarize: true,
+    mode: 'binarize',
   },
   nodict_grey: {
-    label: 'dictionaries off, NO binarize (greyscale straight to Tesseract)',
+    label: 'dictionaries off, no conditioning at all (greyscale to Tesseract)',
     init: TESSERACT_INIT,
     params: BASE_PARAMS,
-    binarize: false,
+    mode: 'off',
+  },
+  nodict_flat: {
+    label: 'dictionaries off, illumination flattened but not thresholded',
+    init: TESSERACT_INIT,
+    params: BASE_PARAMS,
+    mode: 'flatten',
+  },
+  auto_nodeep: {
+    label: 'current conditioning, but matching restricted to substitutions',
+    init: TESSERACT_INIT,
+    params: BASE_PARAMS,
+    mode: 'auto',
+    allowIndels: false,
+  },
+  current: {
+    label: 'CURRENT: dictionaries off, conditioning only where lighting is uneven, indels allowed',
+    init: TESSERACT_INIT,
+    params: BASE_PARAMS,
+    mode: 'auto',
+    allowIndels: true,
   },
 };
 
@@ -106,14 +121,17 @@ async function runPipeline(name) {
     const misses = [];
     for (const tag of tags) {
       const canvas = renderTag(tag, cond);
-      const forOcr = pipe.binarize ? preprocessForOcr(canvas) : canvas;
+      const forOcr = conditionForOcr(canvas, pipe.mode);
       const { data } = await worker.recognize(forOcr.toBuffer('image/png'), {}, { blocks: true, text: true });
 
       const items = wordsToItems(data);
       const read = items.map(i => i.text).join(' ');
       if (normalize(read) === normalize(tag)) exact++;
 
-      const query = { raw: tag, norm: normalize(tag), exact: false, fuzzy: false };
+      // allowIndels mirrors the app's two-pass search: the cheap substitution
+      // scan first, the full alignment only for a search that found nothing.
+      const query = { raw: tag, norm: normalize(tag), exact: false, fuzzy: false,
+                      allowIndels: pipe.allowIndels !== false };
       const hits = findWindowMatches(items, query, {
         maxWindow: MAX_WINDOW, gapFactor: JOIN_GAP_FACTOR, join: ' ',
       });

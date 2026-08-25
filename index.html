@@ -214,6 +214,32 @@
     background: var(--accent); color: #08131f; font-weight: 600;
   }
   .fix-row button.cancel { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
+  /* Confidence bands: a match that needed damage to land must not look like
+     one that didn't. */
+  .band-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 6px 6px; font-size: 11px; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim);
+  }
+  .band-head .band-title { flex: 1; min-width: 0; }
+  .band-head .band-count {
+    background: var(--panel-2); border-radius: 9px; padding: 1px 7px;
+    font-size: 10.5px; letter-spacing: 0; color: var(--text-dim);
+  }
+  .band-confirmed .band-title { color: #6ee7a8; }
+  .band-likely .band-title { color: #e8bf5a; }
+  .band-possible .band-title { color: #c58cf0; }
+  .band-note {
+    color: var(--text-dim); font-size: 11.5px; line-height: 1.5;
+    padding: 0 6px 8px;
+  }
+  .band-collapse > summary { list-style: none; cursor: pointer; }
+  .band-collapse > summary::-webkit-details-marker { display: none; }
+  .band-collapse > summary .band-head::after {
+    content: '▸'; color: var(--text-dim); font-size: 12px;
+  }
+  .band-collapse[open] > summary .band-head::after { content: '▾'; }
+
   .empty-note { color: var(--text-dim); font-size: 12.5px; padding: 10px 6px; line-height: 1.5; }
   #correctionsBar {
     font-size: 11px; color: var(--text-dim); padding: 6px 14px;
@@ -460,7 +486,11 @@
     skipCurrentPageRequested: false,
     isBackgroundRunning: false,
     currentQuery: { raw: "", norm: "", exact: false, fuzzy: false },
-    tickerHandle: null
+    tickerHandle: null,
+    // Set when a search found nothing on the cheap pass and only turned results
+    // up once the matcher was allowed to absorb dropped characters. Those hits
+    // are worth surfacing but not worth presenting as certainties.
+    deepSearchUsed: false
   };
 
   // src/lib/text.js
@@ -532,40 +562,303 @@
   }
 
   // src/lib/confusion.js
-  var CONFUSION_CLASSES = ["0OQD", "1IL", "2Z", "5S", "6G", "8B", "7T", "4A"];
-  var CONFUSION_OF = (() => {
+  var NEAR_IDENTICAL = ["0O", "1I", "1L", "IL", "2Z", "5S", "6G", "8B", "7T", "4A", "OQ", "0Q", "DO", "D0"];
+  var BLUR_CONFUSABLE = [
+    "68",
+    "38",
+    "89",
+    "56",
+    "CG",
+    "CO",
+    "C0",
+    "G0",
+    "EF",
+    "FP",
+    "PR",
+    "UV",
+    "VY",
+    "MW",
+    "MN",
+    "HN",
+    "IJ",
+    "J1",
+    "X K",
+    "KX",
+    "39",
+    "S8",
+    "Z7"
+  ];
+  var HEAVY = ["6B", "14", "17", "49", "90", "5G", "QD"];
+  var T1 = 0.12;
+  var T2 = 0.35;
+  var T3 = 0.55;
+  var SUB_COST = (() => {
     const m = /* @__PURE__ */ new Map();
-    CONFUSION_CLASSES.forEach((cls, i) => {
-      for (const ch of cls) m.set(ch, i);
-    });
+    const put = (pair, cost) => {
+      const [a, b] = [pair[0], pair[pair.length - 1]];
+      m.set(a + b, cost);
+      m.set(b + a, cost);
+    };
+    for (const p of NEAR_IDENTICAL) put(p, T1);
+    for (const p of BLUR_CONFUSABLE) put(p, T2);
+    for (const p of HEAVY) put(p, T3);
     return m;
   })();
-  function charsConfusable(a, b) {
-    if (a === b) return true;
-    const ca = CONFUSION_OF.get(a);
-    return ca !== void 0 && ca === CONFUSION_OF.get(b);
+  var ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  var CODE_OF = new Int8Array(128).fill(-1);
+  for (let i = 0; i < ALPHABET.length; i++) CODE_OF[ALPHABET.charCodeAt(i)] = i;
+  var A = ALPHABET.length;
+  var COST_TABLE = (() => {
+    const t = new Float64Array(A * A).fill(Infinity);
+    for (let i = 0; i < A; i++) {
+      t[i * A + i] = 0;
+      for (let j = 0; j < A; j++) {
+        if (i === j) continue;
+        const c = SUB_COST.get(ALPHABET[i] + ALPHABET[j]);
+        if (c !== void 0) t[i * A + j] = c;
+      }
+    }
+    return t;
+  })();
+  function encode(str) {
+    const out = new Int16Array(str.length);
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i);
+      out[i] = c < 128 ? CODE_OF[c] : -1;
+      if (out[i] < 0) out[i] = -1 - i;
+    }
+    return out;
+  }
+  function costOf(a, b) {
+    if (a === b) return 0;
+    if (a < 0 || b < 0) return Infinity;
+    return COST_TABLE[a * A + b];
+  }
+  var INDEL_COST = 0.8;
+  function indelAllowance(len) {
+    if (len < 6) return 0;
+    return len < 16 ? 1 : 2;
   }
   function confusionBudget(len) {
     if (len < 4) return 0;
-    return Math.max(1, Math.round(len * 0.34));
+    return 0.35 + 0.085 * len;
   }
-  function confusableIndexOf(hay, needle) {
-    const n = needle.length, budget = confusionBudget(n);
-    if (!n || n > hay.length || budget === 0) return null;
+  var T1_FOLD = (() => {
+    const parent = /* @__PURE__ */ new Map();
+    const find = (c) => {
+      while (parent.has(c)) c = parent.get(c);
+      return c;
+    };
+    for (const pair of NEAR_IDENTICAL) {
+      const a = find(pair[0]), b = find(pair[pair.length - 1]);
+      if (a !== b) parent.set(b, a);
+    }
+    const m = /* @__PURE__ */ new Map();
+    for (const pair of NEAR_IDENTICAL) for (const ch of pair) m.set(ch, find(ch));
+    return m;
+  })();
+  var fold = (c) => T1_FOLD.get(c) || c;
+  var FOLD_CODE = (() => {
+    const t = new Int8Array(A);
+    for (let i = 0; i < A; i++) t[i] = CODE_OF[fold(ALPHABET[i]).charCodeAt(0)];
+    return t;
+  })();
+  var MIN_REAL_EDIT = Math.min(T2, INDEL_COST);
+  function compileConfusable(needle) {
+    const counts = /* @__PURE__ */ new Map();
+    const byCode = new Int32Array(A);
+    for (const ch of needle) {
+      const f = fold(ch);
+      counts.set(f, (counts.get(f) || 0) + 1);
+      const code = CODE_OF[ch.charCodeAt(0)];
+      if (code >= 0) byCode[FOLD_CODE[code]]++;
+    }
+    const pairs = [];
+    for (let i = 0; i < A; i++) if (byCode[i]) pairs.push(i, byCode[i]);
+    const budget = confusionBudget(needle.length);
+    return {
+      needle,
+      codes: encode(needle),
+      budget,
+      maxIndels: indelAllowance(needle.length),
+      counts,
+      foldPairs: Int32Array.from(pairs),
+      // How many needle characters may be absent from the candidate entirely
+      // before the cheapest possible explanation already exceeds the budget.
+      maxMissing: Math.floor(budget / MIN_REAL_EDIT)
+    };
+  }
+  var AVAIL = new Int32Array(A);
+  var AVAIL_STAMP = new Int32Array(A);
+  var availGen = 0;
+  function admissible(hayCodes, c) {
+    availGen++;
+    for (let i = 0; i < hayCodes.length; i++) {
+      const code = hayCodes[i];
+      if (code < 0) continue;
+      const f = FOLD_CODE[code];
+      if (AVAIL_STAMP[f] !== availGen) {
+        AVAIL_STAMP[f] = availGen;
+        AVAIL[f] = 0;
+      }
+      AVAIL[f]++;
+    }
+    let missing = 0;
+    const pairs = c.foldPairs;
+    for (let i = 0; i < pairs.length; i += 2) {
+      const f = pairs[i], want = pairs[i + 1];
+      const have = AVAIL_STAMP[f] === availGen ? AVAIL[f] : 0;
+      if (have < want) {
+        missing += want - have;
+        if (missing > c.maxMissing) return false;
+      }
+    }
+    return true;
+  }
+  function substitutionScan(hayCodes, c) {
+    const n = c.codes.length, m = hayCodes.length;
+    if (n > m) return null;
     let best = null;
-    for (let start = 0; start + n <= hay.length; start++) {
-      let subs = 0, ok = true;
+    for (let start = 0; start + n <= m; start++) {
+      let cost = 0, subs = 0, ok = true;
       for (let k = 0; k < n; k++) {
-        const a = hay[start + k], b = needle[k];
+        const a = hayCodes[start + k], b = c.codes[k];
         if (a === b) continue;
-        if (!charsConfusable(a, b) || ++subs > budget) {
+        cost += costOf(a, b);
+        subs++;
+        if (cost > c.budget) {
           ok = false;
           break;
         }
       }
-      if (ok && (!best || subs < best.subs)) {
-        best = { pos: start, subs };
-        if (subs === 0) break;
+      if (ok && (!best || cost < best.cost)) {
+        best = { pos: start, len: n, cost, subs, indels: 0 };
+        if (cost === 0) break;
+      }
+    }
+    return best;
+  }
+  var SCRATCH = { cap: 0 };
+  function rowScratch(size) {
+    if (SCRATCH.cap < size) {
+      const cap = Math.max(size, SCRATCH.cap * 2, 256);
+      SCRATCH.cap = cap;
+      SCRATCH.a = new Float64Array(cap);
+      SCRATCH.aStart = new Int32Array(cap);
+      SCRATCH.aSubs = new Int32Array(cap);
+      SCRATCH.b = new Float64Array(cap);
+      SCRATCH.bStart = new Int32Array(cap);
+      SCRATCH.bSubs = new Int32Array(cap);
+    }
+    return SCRATCH;
+  }
+  function confusableMatch(hay, needle, opts) {
+    const allowIndels = !opts || opts.allowIndels !== false;
+    const c = typeof needle === "string" ? compileConfusable(needle) : needle;
+    const n = c.needle.length, m = hay.length;
+    const { budget, maxIndels } = c;
+    if (!n || budget === 0) return null;
+    if (n > m + maxIndels) return null;
+    const hayCodes = encode(hay);
+    const quick = substitutionScan(hayCodes, c);
+    if (quick) return quick;
+    if (!allowIndels || maxIndels === 0) return null;
+    if (!admissible(hayCodes, c)) return null;
+    const needleCodes = c.codes;
+    const K = maxIndels + 1;
+    const S2 = 3;
+    const size = (m + 1) * K * S2;
+    const at = (j, k, s) => (j * K + k) * S2 + s;
+    const scratch = rowScratch(size);
+    let prev = scratch.a, prevStart = scratch.aStart, prevSubs = scratch.aSubs;
+    let cur = scratch.b, curStart = scratch.bStart, curSubs = scratch.bSubs;
+    prev.fill(Infinity, 0, size);
+    prevStart.fill(-1, 0, size);
+    for (let j = 0; j <= m; j++) {
+      prev[at(j, 0, 0)] = 0;
+      prevStart[at(j, 0, 0)] = j;
+    }
+    for (let i = 1; i <= n; i++) {
+      cur.fill(Infinity, 0, size);
+      curStart.fill(-1, 0, size);
+      const nc = needleCodes[i - 1];
+      for (let j = 0; j <= m; j++) {
+        for (let k = 0; k < K; k++) {
+          for (let s = 0; s < S2; s++) {
+            if (j > 0 && s === 0) {
+              let bestPs = -1, bestFrom = Infinity;
+              for (let ps = 0; ps < S2; ps++) {
+                const from = prev[at(j - 1, k, ps)];
+                if (from < bestFrom) {
+                  bestFrom = from;
+                  bestPs = ps;
+                }
+              }
+              if (bestFrom !== Infinity) {
+                const cost = bestFrom + costOf(hayCodes[j - 1], nc);
+                const dst = at(j, k, 0);
+                if (cost <= budget && cost < cur[dst]) {
+                  cur[dst] = cost;
+                  curStart[dst] = prevStart[at(j - 1, k, bestPs)];
+                  curSubs[dst] = prevSubs[at(j - 1, k, bestPs)] + (hayCodes[j - 1] === nc ? 0 : 1);
+                }
+              }
+            }
+            if (k + 1 < K && !(i === 1 && j !== 0)) {
+              const from = prev[at(j, k, s)];
+              if (from !== Infinity && s !== 2) {
+                const cost = from + INDEL_COST;
+                const dst = at(j, k + 1, 1);
+                if (cost <= budget && cost < cur[dst]) {
+                  cur[dst] = cost;
+                  curStart[dst] = prevStart[at(j, k, s)];
+                  curSubs[dst] = prevSubs[at(j, k, s)];
+                }
+              }
+            }
+          }
+        }
+      }
+      for (let j = 1; j <= m; j++) {
+        for (let k = 0; k + 1 < K; k++) {
+          for (let s = 0; s < S2; s++) {
+            if (s === 1) continue;
+            const from = cur[at(j - 1, k, s)];
+            if (from === Infinity) continue;
+            const cost = from + INDEL_COST;
+            const dst = at(j, k + 1, 2);
+            if (cost <= budget && cost < cur[dst]) {
+              cur[dst] = cost;
+              curStart[dst] = curStart[at(j - 1, k, s)];
+              curSubs[dst] = curSubs[at(j - 1, k, s)];
+            }
+          }
+        }
+      }
+      let t;
+      t = prev;
+      prev = cur;
+      cur = t;
+      t = prevStart;
+      prevStart = curStart;
+      curStart = t;
+      t = prevSubs;
+      prevSubs = curSubs;
+      curSubs = t;
+    }
+    let best = null;
+    for (let j = 0; j <= m; j++) {
+      for (let k = 0; k < K; k++) {
+        for (let s = 0; s < S2; s++) {
+          const c2 = prev[at(j, k, s)];
+          if (c2 === Infinity || c2 > budget) continue;
+          if (s === 1 && j !== m) continue;
+          const start = prevStart[at(j, k, s)];
+          if (start < 0) continue;
+          if (!best || c2 < best.cost) {
+            best = { pos: start, len: j - start, cost: c2, subs: prevSubs[at(j, k, s)], indels: k };
+          }
+        }
       }
     }
     return best;
@@ -575,22 +868,55 @@
   function matchWindow(norm, query) {
     if (!norm || !query.norm) return null;
     const q = query.norm;
+    if (query._compiled !== q) {
+      query._compiled = q;
+      query._needle = compileConfusable(q);
+    }
+    const needle = query._needle;
     if (query.exact) {
-      if (norm === q) return { pos: 0, len: norm.length, confused: false, fuzzy: false };
-      if (norm.length === q.length) {
-        const hit2 = confusableIndexOf(norm, q);
-        if (hit2) return { pos: 0, len: norm.length, confused: hit2.subs > 0, fuzzy: false };
+      if (norm === q) return { pos: 0, len: norm.length, confused: false, fuzzy: false, cost: 0, subs: 0, indels: 0 };
+      const hit2 = confusableMatch(norm, needle, query);
+      if (hit2 && hit2.pos === 0 && hit2.len === norm.length) {
+        return {
+          pos: 0,
+          len: norm.length,
+          confused: hit2.cost > 0,
+          fuzzy: false,
+          cost: hit2.cost,
+          subs: hit2.subs,
+          indels: hit2.indels
+        };
       }
       return null;
     }
     const exactPos = norm.indexOf(q);
-    if (exactPos !== -1) return { pos: exactPos, len: q.length, confused: false, fuzzy: false };
-    const hit = confusableIndexOf(norm, q);
-    if (hit) return { pos: hit.pos, len: q.length, confused: true, fuzzy: false };
+    if (exactPos !== -1) {
+      return { pos: exactPos, len: q.length, confused: false, fuzzy: false, cost: 0, subs: 0, indels: 0 };
+    }
+    const hit = confusableMatch(norm, needle, query);
+    if (hit) {
+      return {
+        pos: hit.pos,
+        len: hit.len,
+        confused: true,
+        fuzzy: false,
+        cost: hit.cost,
+        subs: hit.subs,
+        indels: hit.indels
+      };
+    }
     if (query.fuzzy) {
       const maxDist = q.length <= 4 ? 1 : 2;
       if (Math.abs(norm.length - q.length) <= maxDist && levenshtein(norm, q) <= maxDist) {
-        return { pos: 0, len: norm.length, confused: false, fuzzy: true };
+        return {
+          pos: 0,
+          len: norm.length,
+          confused: false,
+          fuzzy: true,
+          cost: maxDist,
+          subs: maxDist,
+          indels: 0
+        };
       }
     }
     return null;
@@ -729,7 +1055,28 @@
 
   // src/lib/preprocess.js
   var makeCanvas = () => document.createElement("canvas");
-  function preprocessForOcr(srcCanvas) {
+  function illuminationSpread(grey, w, h) {
+    const BX = 8, BY = 4, means = [];
+    for (let by = 0; by < BY; by++) {
+      for (let bx = 0; bx < BX; bx++) {
+        const x0 = Math.floor(bx * w / BX), x1 = Math.floor((bx + 1) * w / BX);
+        const y0 = Math.floor(by * h / BY), y1 = Math.floor((by + 1) * h / BY);
+        let sum = 0, n = 0;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+          sum += grey[y * w + x];
+          n++;
+        }
+        if (n) means.push(sum / n);
+      }
+    }
+    if (means.length < 4) return 0;
+    means.sort((a, b) => a - b);
+    const lo = means[Math.floor(means.length * 0.1)];
+    const hi = means[Math.floor(means.length * 0.9)];
+    return hi <= 1 ? 0 : (hi - lo) / hi;
+  }
+  var UNEVEN_FLOOR = 0.35;
+  function greyPlane(srcCanvas) {
     const w = srcCanvas.width, h = srcCanvas.height;
     const ctx = srcCanvas.getContext("2d", { willReadFrequently: true });
     let img;
@@ -737,16 +1084,23 @@
       img = ctx.getImageData(0, 0, w, h);
     } catch (err) {
       console.warn("Preprocessing skipped (canvas read failed):", err);
-      return srcCanvas;
+      return null;
     }
     const px = img.data;
     const n = w * h;
-    const grey = new Uint8Array(n);
+    const data = new Uint8Array(n);
     for (let i = 0, j = 0; i < n; i++, j += 4) {
-      grey[i] = px[j] * 77 + px[j + 1] * 151 + px[j + 2] * 28 >> 8;
+      data[i] = px[j] * 77 + px[j + 1] * 151 + px[j + 2] * 28 >> 8;
     }
+    return { data, w, h, img };
+  }
+  function localMeanFilter(srcCanvas, decide) {
+    const plane = greyPlane(srcCanvas);
+    if (!plane) return srcCanvas;
+    const { data: grey, w, h, img } = plane;
+    const px = img.data;
+    const n = w * h;
     const radius = clamp(Math.round(Math.min(w, h) / 90), 6, 60);
-    const BIAS = 0.9;
     const hmean = new Uint8Array(n);
     const rowPrefix = new Uint32Array(w + 1);
     for (let y = 0; y < h; y++) {
@@ -777,7 +1131,7 @@
       const row = y * w;
       for (let x = 0; x < w; x++) {
         const i = row + x;
-        const v = grey[i] < colSum[x] / count * BIAS ? 0 : 255;
+        const v = decide(grey[i], colSum[x] / count);
         const j = i * 4;
         px[j] = px[j + 1] = px[j + 2] = v;
         px[j + 3] = 255;
@@ -788,6 +1142,10 @@
     out.height = h;
     out.getContext("2d").putImageData(img, 0, 0);
     return out;
+  }
+  var BIAS = 0.9;
+  function preprocessForOcr(srcCanvas) {
+    return localMeanFilter(srcCanvas, (v, mean) => v < mean * BIAS ? 0 : 255);
   }
   function rotateCanvas(srcCanvas, degrees) {
     const w = srcCanvas.width, h = srcCanvas.height;
@@ -818,6 +1176,21 @@
     }
     return out;
   }
+  function flattenIllumination(srcCanvas, gain = 1.6) {
+    return localMeanFilter(srcCanvas, (v, mean) => {
+      const out = 128 + (v - mean) * gain;
+      return out < 0 ? 0 : out > 255 ? 255 : out;
+    });
+  }
+  function conditionForOcr(srcCanvas, mode = "auto") {
+    if (mode === "off") return srcCanvas;
+    if (mode === "binarize") return preprocessForOcr(srcCanvas);
+    if (mode === "flatten") return flattenIllumination(srcCanvas);
+    const grey = greyPlane(srcCanvas);
+    if (!grey) return srcCanvas;
+    if (illuminationSpread(grey.data, grey.w, grey.h) < UNEVEN_FLOOR) return srcCanvas;
+    return flattenIllumination(srcCanvas);
+  }
 
   // src/app/ocr.js
   async function ensureOcrWorker() {
@@ -839,7 +1212,7 @@
     await page.render({ canvasContext: baseCtx, viewport }).promise;
     data.thumbCanvas = base;
     data.thumbScale = OCR_SCALE;
-    const ocrBase = preprocessForOcr(base);
+    const ocrBase = conditionForOcr(base);
     const W = base.width, H = base.height;
     const rotations = rotatedTextToggle.checked ? [0, 90, 180, 270] : [0];
     const allWords = [];
@@ -906,7 +1279,10 @@
           fuzzy: hit.match.fuzzy,
           confused: hit.match.confused,
           matchPos: hit.match.pos,
-          matchLen: hit.match.len
+          matchLen: hit.match.len,
+          cost: hit.match.cost,
+          subs: hit.match.subs,
+          indels: hit.match.indels
         });
       }
     }
@@ -1058,65 +1434,122 @@
     cancelProcBtn.disabled = true;
   });
 
+  // src/lib/bands.js
+  var BANDS = ["confirmed", "likely", "possible"];
+  var BAND_LABEL = {
+    confirmed: "Matches",
+    likely: "Likely \u2014 glyphs OCR cannot distinguish",
+    possible: "Possible \u2014 check the crop"
+  };
+  var BAND_NOTE = {
+    confirmed: "",
+    likely: "Matched through characters that render identically at drawing scale (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z).",
+    possible: "Matched only by allowing heavier damage \u2014 a substitution that needs a soft image to explain, or a character OCR lost entirely. Verify against the crop before using these."
+  };
+  var T1_COST = 0.12;
+  function bandOf(res) {
+    if (res.fuzzy) return "possible";
+    if (res.indels > 0) return "possible";
+    if (!res.cost) return "confirmed";
+    if (typeof res.subs !== "number") return "possible";
+    return res.cost <= res.subs * T1_COST + 1e-9 ? "likely" : "possible";
+  }
+
   // src/app/results.js
+  function buildResultElement(res, i) {
+    const el = document.createElement("div");
+    el.className = "result-item" + (i === S.activeResultIndex ? " active" : "");
+    el.dataset.index = i;
+    const thumbWrap = document.createElement("div");
+    thumbWrap.className = "result-thumb";
+    const thumbCanvas = document.createElement("canvas");
+    thumbCanvas.width = 120;
+    thumbCanvas.height = 68;
+    thumbWrap.appendChild(thumbCanvas);
+    el.appendChild(thumbWrap);
+    buildThumbnail(res, thumbCanvas);
+    const meta = document.createElement("div");
+    meta.className = "result-meta";
+    const topRow = document.createElement("div");
+    topRow.className = "result-top-row";
+    topRow.innerHTML = '<span class="badge badge-page">Page ' + res.page + '</span><span class="badge ' + (res.source === "text" ? "badge-text" : "badge-ocr") + '">' + (res.source === "text" ? "TEXT" : "OCR") + "</span>" + (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) \u2014 check the crop">GLYPH</span>' : "") + (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : "") + (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : "");
+    if (res.source === "ocr") {
+      const fixBtn = document.createElement("button");
+      fixBtn.className = "fix-btn";
+      fixBtn.textContent = res.corrected ? "Edit fix" : "Fix text";
+      fixBtn.title = "Tell the tool what this actually says \u2014 it will remember and apply it everywhere";
+      fixBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        openFixEditor(el, meta, res);
+      });
+      topRow.appendChild(fixBtn);
+    }
+    meta.appendChild(topRow);
+    const textEl = document.createElement("div");
+    textEl.className = "result-text";
+    textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
+    meta.appendChild(textEl);
+    if (res.source === "ocr") {
+      if (res.corrected) {
+        const rawEl = document.createElement("div");
+        rawEl.className = "result-raw";
+        rawEl.textContent = "OCR read: " + res.rawText;
+        meta.appendChild(rawEl);
+      }
+      const conf = document.createElement("div");
+      conf.className = "result-conf";
+      conf.textContent = res.corrected ? "Confirmed by you (OCR read it at " + Math.round(res.confidence) + "%)" : "OCR confidence: " + Math.round(res.confidence) + "% \u2014 low confidence doesn\u2019t mean wrong; check the crop";
+      meta.appendChild(conf);
+    }
+    el.appendChild(meta);
+    el.addEventListener("click", () => jumpToResult(i));
+    el.addEventListener("click", () => jumpToResult(i));
+    return el;
+  }
   function renderResultsList() {
     resultsList.innerHTML = "";
     if (!S.lastResults.length) {
       const note = document.createElement("div");
       note.className = "empty-note";
-      note.textContent = S.currentQuery.norm ? "No matches yet." : "Enter a tag number or string and press Search.";
+      note.textContent = S.currentQuery.norm ? "No matches yet \u2014 including after allowing for characters OCR may have lost. If you can see the tag on the sheet, use Fix text on whatever OCR did read there." : "Enter a tag number or string and press Search.";
       resultsList.appendChild(note);
       return;
     }
-    S.lastResults.forEach((res, i) => {
-      const el = document.createElement("div");
-      el.className = "result-item" + (i === S.activeResultIndex ? " active" : "");
-      el.dataset.index = i;
-      const thumbWrap = document.createElement("div");
-      thumbWrap.className = "result-thumb";
-      const thumbCanvas = document.createElement("canvas");
-      thumbCanvas.width = 120;
-      thumbCanvas.height = 68;
-      thumbWrap.appendChild(thumbCanvas);
-      el.appendChild(thumbWrap);
-      buildThumbnail(res, thumbCanvas);
-      const meta = document.createElement("div");
-      meta.className = "result-meta";
-      const topRow = document.createElement("div");
-      topRow.className = "result-top-row";
-      topRow.innerHTML = '<span class="badge badge-page">Page ' + res.page + '</span><span class="badge ' + (res.source === "text" ? "badge-text" : "badge-ocr") + '">' + (res.source === "text" ? "TEXT" : "OCR") + "</span>" + (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) \u2014 check the crop">GLYPH</span>' : "") + (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : "") + (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : "");
-      if (res.source === "ocr") {
-        const fixBtn = document.createElement("button");
-        fixBtn.className = "fix-btn";
-        fixBtn.textContent = res.corrected ? "Edit fix" : "Fix text";
-        fixBtn.title = "Tell the tool what this actually says \u2014 it will remember and apply it everywhere";
-        fixBtn.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          openFixEditor(el, meta, res);
-        });
-        topRow.appendChild(fixBtn);
-      }
-      meta.appendChild(topRow);
-      const textEl = document.createElement("div");
-      textEl.className = "result-text";
-      textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
-      meta.appendChild(textEl);
-      if (res.source === "ocr") {
-        if (res.corrected) {
-          const rawEl = document.createElement("div");
-          rawEl.className = "result-raw";
-          rawEl.textContent = "OCR read: " + res.rawText;
-          meta.appendChild(rawEl);
+    const grouped = new Map(BANDS.map((b) => [b, []]));
+    S.lastResults.forEach((res, i) => grouped.get(bandOf(res)).push([res, i]));
+    const populated = BANDS.filter((b) => grouped.get(b).length);
+    for (const band of populated) {
+      const group = grouped.get(band);
+      const head = document.createElement("div");
+      head.className = "band-head band-" + band;
+      head.innerHTML = '<span class="band-title"></span><span class="band-count"></span>';
+      head.querySelector(".band-title").textContent = BAND_LABEL[band];
+      head.querySelector(".band-count").textContent = group.length;
+      const rows = document.createElement("div");
+      for (const [res, i] of group) rows.appendChild(buildResultElement(res, i));
+      if (band === "possible" && populated.length > 1) {
+        const box = document.createElement("details");
+        box.className = "band-collapse";
+        const sum = document.createElement("summary");
+        sum.appendChild(head);
+        box.appendChild(sum);
+        const note = document.createElement("div");
+        note.className = "band-note";
+        note.textContent = BAND_NOTE[band];
+        box.appendChild(note);
+        box.appendChild(rows);
+        resultsList.appendChild(box);
+      } else {
+        resultsList.appendChild(head);
+        if (BAND_NOTE[band]) {
+          const note = document.createElement("div");
+          note.className = "band-note";
+          note.textContent = BAND_NOTE[band];
+          resultsList.appendChild(note);
         }
-        const conf = document.createElement("div");
-        conf.className = "result-conf";
-        conf.textContent = res.corrected ? "Confirmed by you (OCR read it at " + Math.round(res.confidence) + "%)" : "OCR confidence: " + Math.round(res.confidence) + "% \u2014 low confidence doesn\u2019t mean wrong; check the crop";
-        meta.appendChild(conf);
+        resultsList.appendChild(rows);
       }
-      el.appendChild(meta);
-      el.addEventListener("click", () => jumpToResult(i));
-      resultsList.appendChild(el);
-    });
+    }
   }
   function openFixEditor(itemEl, metaEl, res) {
     if (metaEl.querySelector(".fix-row")) return;
@@ -1660,7 +2093,10 @@
           fuzzy: hit.match.fuzzy,
           confused: hit.match.confused,
           matchPos: hit.match.pos,
-          matchLen: hit.match.len
+          matchLen: hit.match.len,
+          cost: hit.match.cost,
+          subs: hit.match.subs,
+          indels: hit.match.indels
         });
       }
     }
@@ -1676,13 +2112,25 @@
     if (d.ocrLines) results = results.concat(searchOcr(pageNum, query));
     return results;
   }
+  function searchablePages() {
+    const pages = [];
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
+      if (!d) continue;
+      if (d.status === "text-done" || d.status === "ocr-done" || d.status === "skipped") pages.push(p);
+    }
+    return pages;
+  }
   function runFullSearch() {
     const raw = searchInput.value.trim();
     S.currentQuery = {
       raw,
       norm: normalize(raw),
       exact: exactToggle.checked,
-      fuzzy: fuzzyToggle.checked
+      fuzzy: fuzzyToggle.checked,
+      // First pass allows only substitutions, which is roughly ten times cheaper
+      // than the full alignment. See below for when that gets lifted.
+      allowIndels: false
     };
     if (!S.currentQuery.norm) {
       S.lastResults = [];
@@ -1691,11 +2139,19 @@
       drawHighlights();
       return;
     }
-    S.lastResults = [];
-    for (let p = 1; p <= S.numPages; p++) {
-      const d = S.pageData.get(p);
-      if (!d || d.status !== "text-done" && d.status !== "ocr-done" && d.status !== "skipped") continue;
-      S.lastResults.push(...searchPage(p, S.currentQuery));
+    const pages = searchablePages();
+    const collect = () => {
+      const out = [];
+      for (const p of pages) out.push(...searchPage(p, S.currentQuery));
+      return out;
+    };
+    S.lastResults = collect();
+    if (!S.lastResults.length) {
+      S.currentQuery.allowIndels = true;
+      S.lastResults = collect();
+      S.deepSearchUsed = S.lastResults.length > 0;
+    } else {
+      S.deepSearchUsed = false;
     }
     S.activeResultIndex = -1;
     renderResultsList();
@@ -1718,6 +2174,7 @@
       if (!["text-done", "ocr-done", "skipped", "error"].includes(d.status)) pagesUnprocessed.push(p);
     }
     let msg = S.lastResults.length + " match" + (S.lastResults.length === 1 ? "" : "es") + " found so far";
+    if (S.deepSearchUsed) msg += " \u2014 nothing matched exactly, so these allow for characters OCR lost entirely. Check the crops.";
     if (pagesUnprocessed.length) msg += " (" + pagesUnprocessed.length + " page" + (pagesUnprocessed.length === 1 ? "" : "s") + " still processing \u2014 results will keep appearing)";
     searchSummary.textContent = msg;
     resultsCount.textContent = S.lastResults.length + " result" + (S.lastResults.length === 1 ? "" : "s");

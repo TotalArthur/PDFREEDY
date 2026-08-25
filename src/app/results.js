@@ -1,4 +1,5 @@
 import { S } from './state.js';
+import { BANDS, BAND_LABEL, BAND_NOTE, bandOf } from '../lib/bands.js';
 import { clamp, escapeHtml } from '../lib/text.js';
 import { itemQuadCanvas, boundsOfPoints } from '../lib/geometry.js';
 import { setCorrection } from './corrections.js';
@@ -13,76 +14,128 @@ import {
 // =======================================================================
 // Results list rendering (with thumbnails)
 // =======================================================================
+// One row. Everything the reader needs to judge the hit without opening it:
+// which page, where it came from, what it says, and — via the band it sits in —
+// how much damage the matcher had to absorb to call it a match.
+function buildResultElement(res, i) {
+  const el = document.createElement('div');
+  el.className = 'result-item' + (i === S.activeResultIndex ? ' active' : '');
+  el.dataset.index = i;
+
+  const thumbWrap = document.createElement('div');
+  thumbWrap.className = 'result-thumb';
+  const thumbCanvas = document.createElement('canvas');
+  thumbCanvas.width = 120; thumbCanvas.height = 68;
+  thumbWrap.appendChild(thumbCanvas);
+  el.appendChild(thumbWrap);
+  buildThumbnail(res, thumbCanvas);
+
+  const meta = document.createElement('div');
+  meta.className = 'result-meta';
+
+  const topRow = document.createElement('div');
+  topRow.className = 'result-top-row';
+  topRow.innerHTML =
+    '<span class="badge badge-page">Page ' + res.page + '</span>' +
+    '<span class="badge ' + (res.source==='text' ? 'badge-text' : 'badge-ocr') + '">' + (res.source==='text'?'TEXT':'OCR') + '</span>' +
+    (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) — check the crop">GLYPH</span>' : '') +
+    (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : '') +
+    (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : '');
+  if (res.source === 'ocr') {
+    const fixBtn = document.createElement('button');
+    fixBtn.className = 'fix-btn';
+    fixBtn.textContent = res.corrected ? 'Edit fix' : 'Fix text';
+    fixBtn.title = 'Tell the tool what this actually says — it will remember and apply it everywhere';
+    fixBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      openFixEditor(el, meta, res);
+    });
+    topRow.appendChild(fixBtn);
+  }
+  meta.appendChild(topRow);
+
+  const textEl = document.createElement('div');
+  textEl.className = 'result-text';
+  textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
+  meta.appendChild(textEl);
+
+  if (res.source === 'ocr') {
+    if (res.corrected) {
+      const rawEl = document.createElement('div');
+      rawEl.className = 'result-raw';
+      rawEl.textContent = 'OCR read: ' + res.rawText;
+      meta.appendChild(rawEl);
+    }
+    const conf = document.createElement('div');
+    conf.className = 'result-conf';
+    conf.textContent = res.corrected
+      ? 'Confirmed by you (OCR read it at ' + Math.round(res.confidence) + '%)'
+      : 'OCR confidence: ' + Math.round(res.confidence) + '% — low confidence doesn’t mean wrong; check the crop';
+    meta.appendChild(conf);
+  }
+
+  el.appendChild(meta);
+  el.addEventListener('click', () => jumpToResult(i));
+  el.addEventListener('click', () => jumpToResult(i));
+  return el;
+}
+
 function renderResultsList() {
   resultsList.innerHTML = '';
   if (!S.lastResults.length) {
     const note = document.createElement('div');
     note.className = 'empty-note';
-    note.textContent = S.currentQuery.norm ? 'No matches yet.' : 'Enter a tag number or string and press Search.';
+    note.textContent = S.currentQuery.norm
+      ? 'No matches yet — including after allowing for characters OCR may have lost. If you can see the tag on the sheet, use Fix text on whatever OCR did read there.'
+      : 'Enter a tag number or string and press Search.';
     resultsList.appendChild(note);
     return;
   }
-  S.lastResults.forEach((res, i) => {
-    const el = document.createElement('div');
-    el.className = 'result-item' + (i === S.activeResultIndex ? ' active' : '');
-    el.dataset.index = i;
 
-    const thumbWrap = document.createElement('div');
-    thumbWrap.className = 'result-thumb';
-    const thumbCanvas = document.createElement('canvas');
-    thumbCanvas.width = 120; thumbCanvas.height = 68;
-    thumbWrap.appendChild(thumbCanvas);
-    el.appendChild(thumbWrap);
-    buildThumbnail(res, thumbCanvas);
+  // Group by how sure the match is, rather than listing every hit alike. The
+  // order within a band is still page order, which mergeFreshResults maintains.
+  const grouped = new Map(BANDS.map(b => [b, []]));
+  S.lastResults.forEach((res, i) => grouped.get(bandOf(res)).push([res, i]));
+  const populated = BANDS.filter(b => grouped.get(b).length);
 
-    const meta = document.createElement('div');
-    meta.className = 'result-meta';
+  for (const band of populated) {
+    const group = grouped.get(band);
 
-    const topRow = document.createElement('div');
-    topRow.className = 'result-top-row';
-    topRow.innerHTML =
-      '<span class="badge badge-page">Page ' + res.page + '</span>' +
-      '<span class="badge ' + (res.source==='text' ? 'badge-text' : 'badge-ocr') + '">' + (res.source==='text'?'TEXT':'OCR') + '</span>' +
-      (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) — check the crop">GLYPH</span>' : '') +
-      (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : '') +
-      (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : '');
-    if (res.source === 'ocr') {
-      const fixBtn = document.createElement('button');
-      fixBtn.className = 'fix-btn';
-      fixBtn.textContent = res.corrected ? 'Edit fix' : 'Fix text';
-      fixBtn.title = 'Tell the tool what this actually says — it will remember and apply it everywhere';
-      fixBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        openFixEditor(el, meta, res);
-      });
-      topRow.appendChild(fixBtn);
-    }
-    meta.appendChild(topRow);
+    const head = document.createElement('div');
+    head.className = 'band-head band-' + band;
+    head.innerHTML = '<span class="band-title"></span><span class="band-count"></span>';
+    head.querySelector('.band-title').textContent = BAND_LABEL[band];
+    head.querySelector('.band-count').textContent = group.length;
 
-    const textEl = document.createElement('div');
-    textEl.className = 'result-text';
-    textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
-    meta.appendChild(textEl);
+    const rows = document.createElement('div');
+    for (const [res, i] of group) rows.appendChild(buildResultElement(res, i));
 
-    if (res.source === 'ocr') {
-      if (res.corrected) {
-        const rawEl = document.createElement('div');
-        rawEl.className = 'result-raw';
-        rawEl.textContent = 'OCR read: ' + res.rawText;
-        meta.appendChild(rawEl);
+    // "Possible" hits are never hidden — a tag that is plainly on the drawing
+    // must not be reported as absent — but they are folded away when there is
+    // something better to look at first.
+    if (band === 'possible' && populated.length > 1) {
+      const box = document.createElement('details');
+      box.className = 'band-collapse';
+      const sum = document.createElement('summary');
+      sum.appendChild(head);
+      box.appendChild(sum);
+      const note = document.createElement('div');
+      note.className = 'band-note';
+      note.textContent = BAND_NOTE[band];
+      box.appendChild(note);
+      box.appendChild(rows);
+      resultsList.appendChild(box);
+    } else {
+      resultsList.appendChild(head);
+      if (BAND_NOTE[band]) {
+        const note = document.createElement('div');
+        note.className = 'band-note';
+        note.textContent = BAND_NOTE[band];
+        resultsList.appendChild(note);
       }
-      const conf = document.createElement('div');
-      conf.className = 'result-conf';
-      conf.textContent = res.corrected
-        ? 'Confirmed by you (OCR read it at ' + Math.round(res.confidence) + '%)'
-        : 'OCR confidence: ' + Math.round(res.confidence) + '% — low confidence doesn’t mean wrong; check the crop';
-      meta.appendChild(conf);
+      resultsList.appendChild(rows);
     }
-
-    el.appendChild(meta);
-    el.addEventListener('click', () => jumpToResult(i));
-    resultsList.appendChild(el);
-  });
+  }
 }
 
 // Inline "what does this actually say?" editor. Saving stores a correction

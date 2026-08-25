@@ -42,4 +42,10 @@ export const CONDITIONS = [
   { name: 'bad-11px',     height: 11, blur: 0.7, noise: 30 },
   { name: 'worse-11px',   height: 11, blur: 1.2, noise: 45 },
   { name: 'awful-9px',    height:  9, blur: 0.9, noise: 45 },
+  // Uneven illumination — the condition the adaptive binarizer was written for.
+  // Without these the bench can only see what thresholding costs, never what it
+  // buys, and would happily recommend deleting it.
+  { name: 'lit-28px',     height: 28, blur: 0,   noise: 0,  uneven: 0.55 },
+  { name: 'lit-14px',     height: 14, blur: 0.4, noise: 10, uneven: 0.55 },
+  { name: 'lit-soft-14',  height: 14, blur: 1.0, noise: 20, uneven: 0.6  },
 ];

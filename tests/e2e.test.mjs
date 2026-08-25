@@ -66,7 +66,8 @@ writeFileSync(pdfPath, makePdf([
   [{ text: 'PT-11004', x: 72, y: 700 },
    { text: 'DRAWING 12-A REV 3', x: 72, y: 660 },
    { text: 'PIPING AND INSTRUMENT DIAGRAM', x: 72, y: 620 }],
-  [{ text: 'V-68O1-l5PW4/3-75O-PPGO-RE1', x: 60, y: 500 }],
+  [{ text: 'V-68O1-l5PW4/3-75O-PPGO-RE1', x: 60, y: 500 },
+   { text: 'FC2015', x: 60, y: 440 }],
 ]));
 
 const browser = await chromium.launch();
@@ -120,6 +121,8 @@ async function search(tag, opts = {}) {
     badges: [...e.querySelectorAll('.badge')].map(b => b.textContent),
   })));
 }
+const bandsShown = () => page.$$eval('#resultsList .band-head',
+  els => els.map(e => e.className.split(' ').find(c => c.startsWith('band-') && c !== 'band-head')));
 
 {
   const r = await search('PT-11004');
@@ -136,6 +139,29 @@ check('formatting-insensitive search finds the tag', (await search('11-004')).le
   check('and is badged GLYPH so it reads as a guess', r[0]?.badges.includes('GLYPH'), JSON.stringify(r[0]?.badges));
 }
 check('a different tag does not match (precision)', (await search('PT-11005')).length === 0);
+
+// ---- confidence banding -------------------------------------------------
+{
+  await search('PT-11004');
+  check('an exact hit sits under Matches', (await bandsShown()).includes('band-confirmed'),
+    JSON.stringify(await bandsShown()));
+}
+{
+  await search('V-6801-15PW4/3-750-PP60-RE1');
+  check('a glyph-confused hit sits under Likely, not Matches',
+    (await bandsShown()).includes('band-likely'), JSON.stringify(await bandsShown()));
+}
+{
+  // The drawing says FC2015; the tag is FIC-2015. Nothing matches on the cheap
+  // pass, so the search escalates to allow the erased I — and says so.
+  const r = await search('FIC-2015');
+  check('a tag with a character erased is still found', r.length === 1, JSON.stringify(r));
+  check('and is filed under Possible, not presented as a match',
+    (await bandsShown()).includes('band-possible'), JSON.stringify(await bandsShown()));
+  const summary = await page.textContent('#searchSummary');
+  check('and the summary says the search had to try harder',
+    /lost entirely/.test(summary), summary);
+}
 
 // Clicking a result must navigate and highlight without throwing.
 await search('V-6801-15PW4/3-750-PP60-RE1');
