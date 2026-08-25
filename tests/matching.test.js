@@ -1,37 +1,19 @@
 #!/usr/bin/env node
 /*
- * Dependency-free tests for the two pieces of index.html that decide whether a
- * tag is found: the confusion-tolerant matcher and the rotated-text reading
- * axis. Both are pure functions, so they are lifted straight out of the single
- * HTML file by name and exercised here — no build step, no bundler, no deps.
+ * Tests for the two pieces that decide whether a tag is found: the
+ * confusion-tolerant matcher and the rotated-text reading axis. Both are pure
+ * functions living in src/lib/, imported directly — no build step needed to
+ * run these, even though the shipped page is built.
  *
  *   node tests/matching.test.js
  */
-const fs = require('fs');
-const path = require('path');
+import { normalize, levenshtein } from '../src/lib/text.js';
+import { charsConfusable, confusableIndexOf } from '../src/lib/confusion.js';
+import { matchWindow } from '../src/lib/matching.js';
+import { mapBoxBack, readingAxis, boundsOfPoints } from '../src/lib/geometry.js';
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-
-function grab(startMarker, endMarker) {
-  const i = html.indexOf(startMarker);
-  if (i < 0) throw new Error('marker not found in index.html: ' + startMarker);
-  const j = html.indexOf(endMarker, i);
-  if (j < 0) throw new Error('end marker not found in index.html: ' + endMarker);
-  return html.slice(i, j);
-}
-
-const source = [
-  grab('function normalize(s)', 'function clamp('),
-  grab('const CONFUSION_CLASSES', 'OCR corrections'),
-  grab('function levenshtein', 'function escapeHtml'),
-  grab('function boundsOfPoints', 'function levenshtein'),
-  grab('function inverseRotatePoint', 'async function runOcrForPage'),
-].join('\n');
-
-const M = new Function(source + `
-  return { normalize, charsConfusable, confusableIndexOf, matchWindow,
-           levenshtein, mapBoxBack, readingAxis, boundsOfPoints };
-`)();
+const M = { normalize, charsConfusable, confusableIndexOf, matchWindow,
+            levenshtein, mapBoxBack, readingAxis, boundsOfPoints };
 
 let pass = 0, fail = 0;
 function check(name, cond) {

@@ -1,25 +1,13 @@
 #!/usr/bin/env node
 /*
- * Tests preprocessForOcr() from index.html against a synthetic sheet that
- * reproduces the condition it exists for: a drawing with uneven illumination
- * (scanned or photographed), where no single global cutoff can separate stroke
- * from paper across the whole sheet.
+ * Tests preprocessForOcr() against a synthetic sheet that reproduces the
+ * condition it exists for: a drawing with uneven illumination (scanned or
+ * photographed), where no single global cutoff can separate stroke from paper
+ * across the whole sheet.
  *
  *   node tests/preprocess.test.js
  */
-const fs = require('fs');
-const path = require('path');
-
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-function grab(a, b) {
-  const i = html.indexOf(a);
-  if (i < 0) throw new Error('marker not found in index.html: ' + a);
-  const j = html.indexOf(b, i);
-  if (j < 0) throw new Error('end marker not found in index.html: ' + b);
-  return html.slice(i, j);
-}
-const code = grab('function clamp(', '\n  // ====') + '\n'
-           + grab('function preprocessForOcr', 'function rotateCanvas');
+import { preprocessForOcr, setCanvasFactory } from '../src/lib/preprocess.js';
 
 const W = 400, H = 300;
 const out = {};
@@ -36,7 +24,7 @@ function mkCanvas(w, h, fill) {
     }),
   };
 }
-global.document = { createElement: () => mkCanvas(W, H) };
+setCanvasFactory(() => mkCanvas(W, H));
 
 // A strong left-to-right illumination gradient (paper 90 -> 240) with strokes
 // that are always 60 units darker than their LOCAL background. Strokes on the
@@ -52,7 +40,7 @@ const src = mkCanvas(W, H, (d, w, h) => {
   }
 });
 
-new Function('src', code + '\nreturn preprocessForOcr(src);')(src);
+preprocessForOcr(src);
 const res = out.data;
 
 let tp = 0, fp = 0, fn = 0;

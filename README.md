@@ -6,8 +6,11 @@ Built for P&IDs (piping and instrumentation diagrams), where the same tag can ap
 on several sheets, labels run vertically along pipe runs, and half the drawings are
 scanned rather than native CAD exports.
 
-It is a **single `index.html` file**. Double-click it and it runs. No install, no build
-step, no server, no npm.
+For anyone using it, it is still a **single `index.html` file**: double-click it and it
+runs. No install, no server, nothing to set up.
+
+For anyone *changing* it, the source now lives in `src/` as ES modules and `index.html`
+is built from them — see [Developing](#developing).
 
 ---
 
@@ -187,14 +190,39 @@ Both loaded from jsDelivr; there is nothing to install.
 
 ---
 
-## Tests
+## Developing
 
-Pure-logic tests for the parts that decide whether a tag is found. They lift the functions
-straight out of `index.html` by name — no build step, no bundler, no dependencies:
+The app outgrew a single inline `<script>`. Source is now `src/`, and `index.html` at the
+repo root is the **built artifact** — generated, committed, and still the only thing a
+user needs.
+
+```
+src/lib/     pure logic: text, confusion, matching, geometry, preprocessing
+src/app/     the application: dom, state, pdf, textlayer, ocr, queue, search, results, viewer
+src/index.template.html   the page; the bundle is inlined at <!--BUNDLE-->
+```
+
+```bash
+npm install        # esbuild + playwright, dev-only
+npm run build      # regenerates index.html
+npm test           # unit + end-to-end, and fails if index.html is stale
+```
+
+`index.html` is generated — edit `src/` and rebuild. `npm test` will tell you if you
+forgot.
+
+## Tests
 
 ```
 node tests/matching.test.js     # confusion matching + rotated reading axis
 node tests/preprocess.test.js   # adaptive binarization vs a global threshold
+node tests/e2e.test.mjs         # real browser: open a PDF, search, click a result
+node build.mjs --check          # index.html matches src/
 ```
 
-Both exit non-zero on failure.
+The first two are pure-logic tests over `src/lib/`, with no dependencies. The third drives
+the built page in headless Chromium against a generated PDF — it is what proves the module
+split didn't break the wiring. It fetches nothing: run `tools/fetch-vendor.sh` once to
+cache pdf.js and tesseract.js locally, and it skips itself if they're missing.
+
+All exit non-zero on failure.

@@ -20,3 +20,8 @@ Desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# Build tooling (the built index.html IS committed — it is the product)
+node_modules/
+orig.html
+tests/vendor/

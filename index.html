@@ -387,217 +387,126 @@
 </div>
 
 <script>
-(function(){
-  "use strict";
+/* GENERATED FILE — do not edit.
+   Source lives in src/; rebuild with `npm run build`. */
+(() => {
+  // src/app/dom.js
+  var $ = (id) => document.getElementById(id);
+  var fileInput = $("fileInput");
+  var fileInfo = $("fileInfo");
+  var dropOverlay = $("dropOverlay");
+  var correctionsBar = $("correctionsBar");
+  var correctionsCount = $("correctionsCount");
+  var clearCorrectionsBtn = $("clearCorrectionsBtn");
+  var searchInput = $("searchInput");
+  var searchBtn = $("searchBtn");
+  var exactToggle = $("exactToggle");
+  var fuzzyToggle = $("fuzzyToggle");
+  var searchSummary = $("searchSummary");
+  var procDetail = $("procDetail");
+  var procDetailText = $("procDetailText");
+  var procSpinner = $("procSpinner");
+  var procBarInner = $("procBarInner");
+  var skipPageBtn = $("skipPageBtn");
+  var cancelProcBtn = $("cancelProcBtn");
+  var resultsCount = $("resultsCount");
+  var resultsList = $("resultsList");
+  var exportCsvBtn = $("exportCsvBtn");
+  var toolbar = $("toolbar");
+  var prevPageBtn = $("prevPageBtn");
+  var nextPageBtn = $("nextPageBtn");
+  var pageNumInput = $("pageNumInput");
+  var pageCountLabel = $("pageCountLabel");
+  var currentPageBadge = $("currentPageBadge");
+  var zoomOutBtn = $("zoomOutBtn");
+  var zoomInBtn = $("zoomInBtn");
+  var zoomLabel = $("zoomLabel");
+  var fitWidthBtn = $("fitWidthBtn");
+  var zoomResetBtn = $("zoomResetBtn");
+  var canvasScroll = $("canvasScroll");
+  var canvasStage = $("canvasStage");
+  var pageCanvas = $("pageCanvas");
+  var overlayCanvas = $("overlayCanvas");
+  var rotatedTextToggle = $("rotatedTextToggle");
+  var emptyViewer = $("emptyViewer");
+  var pageProgressBanner = $("pageProgressBanner");
+  var pageProgressText = $("pageProgressText");
+  var pageProgressSpinner = $("pageProgressSpinner");
+  var pageCtx = pageCanvas.getContext("2d");
+  var overlayCtx = overlayCanvas.getContext("2d");
 
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  // src/app/state.js
+  var S = {
+    pdfDoc: null,
+    numPages: 0,
+    currentPage: 1,
+    scale: 1.5,
+    pageProxyCache: /* @__PURE__ */ new Map(),
+    // pageNum -> pdf.js page proxy promise
+    pageData: /* @__PURE__ */ new Map(),
+    // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen }
+    lastResults: [],
+    // current search result set
+    activeResultIndex: -1,
+    ocrWorker: null,
+    // lazily-created shared tesseract worker
+    currentRenderTask: null,
+    // in-flight pdf.js render on the page canvas
+    // Bumped every time a document is loaded/cleared. Background work captures the
+    // epoch it started under and bails out once it's stale, so a queue belonging to
+    // a previous PDF can't overwrite the new document's status, badge or ticker.
+    docEpoch: 0,
+    processingCancelled: false,
+    skipCurrentPageRequested: false,
+    isBackgroundRunning: false,
+    currentQuery: { raw: "", norm: "", exact: false, fuzzy: false },
+    tickerHandle: null
+  };
 
-  // ---------------------------------------------------------------------
-  // DOM refs
-  // ---------------------------------------------------------------------
-  const $ = id => document.getElementById(id);
-  const fileInput = $('fileInput');
-  const fileInfo = $('fileInfo');
-  const dropOverlay = $('dropOverlay');
-  const correctionsBar = $('correctionsBar');
-  const correctionsCount = $('correctionsCount');
-  const clearCorrectionsBtn = $('clearCorrectionsBtn');
-  const searchInput = $('searchInput');
-  const searchBtn = $('searchBtn');
-  const exactToggle = $('exactToggle');
-  const fuzzyToggle = $('fuzzyToggle');
-  const searchSummary = $('searchSummary');
-  const procDetail = $('procDetail');
-  const procDetailText = $('procDetailText');
-  const procSpinner = $('procSpinner');
-  const procBarInner = $('procBarInner');
-  const skipPageBtn = $('skipPageBtn');
-  const cancelProcBtn = $('cancelProcBtn');
-  const resultsCount = $('resultsCount');
-  const resultsList = $('resultsList');
-  const exportCsvBtn = $('exportCsvBtn');
-  const toolbar = $('toolbar');
-  const prevPageBtn = $('prevPageBtn');
-  const nextPageBtn = $('nextPageBtn');
-  const pageNumInput = $('pageNumInput');
-  const pageCountLabel = $('pageCountLabel');
-  const currentPageBadge = $('currentPageBadge');
-  const zoomOutBtn = $('zoomOutBtn');
-  const zoomInBtn = $('zoomInBtn');
-  const zoomLabel = $('zoomLabel');
-  const fitWidthBtn = $('fitWidthBtn');
-  const zoomResetBtn = $('zoomResetBtn');
-  const canvasScroll = $('canvasScroll');
-  const canvasStage = $('canvasStage');
-  const pageCanvas = $('pageCanvas');
-  const overlayCanvas = $('overlayCanvas');
-  const rotatedTextToggle = $('rotatedTextToggle');
-  const emptyViewer = $('emptyViewer');
-  const pageProgressBanner = $('pageProgressBanner');
-  const pageProgressText = $('pageProgressText');
-  const pageProgressSpinner = $('pageProgressSpinner');
-
-  const pageCtx = pageCanvas.getContext('2d');
-  const overlayCtx = overlayCanvas.getContext('2d');
-
-  // ---------------------------------------------------------------------
-  // Global state
-  // ---------------------------------------------------------------------
-  let pdfDoc = null;
-  let numPages = 0;
-  let currentPage = 1;
-  let scale = 1.5;
-  const pageProxyCache = new Map();      // pageNum -> pdf.js page proxy promise
-  const pageData = new Map();            // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen }
-  let lastResults = [];                  // current search result set
-  let activeResultIndex = -1;
-  let ocrWorker = null;                  // lazily-created shared tesseract worker
-  let currentRenderTask = null;          // in-flight pdf.js render on the page canvas
-  // Bumped every time a document is loaded/cleared. Background work captures the
-  // epoch it started under and bails out once it's stale, so a queue belonging to
-  // a previous PDF can't overwrite the new document's status, badge or ticker.
-  let docEpoch = 0;
-  let processingCancelled = false;
-  let skipCurrentPageRequested = false;
-  let isBackgroundRunning = false;
-  let currentQuery = { raw: '', norm: '', exact: false, fuzzy: false };
-
-  const OCR_SCALE = 3.5;               // render scale used for OCR passes (landscape-only by default, so there's headroom for a sharper single pass)
-  const TEXT_LEN_THRESHOLD = 20;       // page text length above which we skip OCR
-  const JOIN_GAP_FACTOR = 2.2;         // how close adjacent items/words must be to join into a window
-  const MAX_WINDOW = 6;                // max consecutive items/words joined when testing a match
-
-  // =======================================================================
-  // Utility
-  // =======================================================================
+  // src/lib/text.js
   function normalize(s) {
-    // Strip everything but letters/digits — real-world OCR output is full of stray
-    // commas, brackets, quotes, dashes of various widths, etc. that aren't part of
-    // the tag itself, and tag formatting conventions vary (11-004 vs 11004 vs 11 004).
-    return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   }
-
-  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-
-  // =======================================================================
-  // Confusion-tolerant matching
-  //
-  // The dominant OCR failure mode on CAD drawings isn't "text not found", it's
-  // glyph confusion: the stroke-thin dot-matrix font used for tag callouts
-  // renders 0 and O, 1 and I/l, 5 and S, 8 and B, 6 and G, 2 and Z almost
-  // identically at drawing scale. A raw substring search therefore misses
-  // V-6801-15PW11 when Tesseract reported V-68O1-l5PW11 — even though every
-  // character it got "wrong" is one it cannot physically distinguish.
-  //
-  // Instead of blanket-folding both sides to a canonical form (which destroys
-  // specificity — GP and 6P would collide), we compare the query against the
-  // candidate position by position and permit a mismatch ONLY when the two
-  // characters belong to the same confusion class. A candidate must still match
-  // the query exactly everywhere else, so precision stays high while the
-  // known-ambiguous glyph pairs stop causing misses.
-  // =======================================================================
-  const CONFUSION_CLASSES = ['0OQD', '1IL', '2Z', '5S', '6G', '8B', '7T', '4A'];
-  const CONFUSION_OF = (() => {
-    const m = new Map();
-    CONFUSION_CLASSES.forEach((cls, i) => { for (const ch of cls) m.set(ch, i); });
-    return m;
-  })();
-
-  // Same character, or two glyphs OCR genuinely cannot tell apart.
-  function charsConfusable(a, b) {
-    if (a === b) return true;
-    const ca = CONFUSION_OF.get(a);
-    return ca !== undefined && ca === CONFUSION_OF.get(b);
+  function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
   }
-
-  // Substitution budget: generous enough for a badly-garbled read, tight enough
-  // that a short query can't match half the drawing. Exact matches cost nothing.
-  function confusionBudget(len) {
-    if (len < 4) return 0;                        // too short to risk it
-    return Math.max(1, Math.round(len * 0.34));
-  }
-
-  // Find `needle` inside `hay` allowing only confusion-class substitutions.
-  // Returns { pos, subs } for the best (fewest-substitutions) hit, or null.
-  function confusableIndexOf(hay, needle) {
-    const n = needle.length, budget = confusionBudget(n);
-    if (!n || n > hay.length || budget === 0) return null;
-    let best = null;
-    for (let start = 0; start + n <= hay.length; start++) {
-      let subs = 0, ok = true;
-      for (let k = 0; k < n; k++) {
-        const a = hay[start + k], b = needle[k];
-        if (a === b) continue;
-        if (!charsConfusable(a, b) || ++subs > budget) { ok = false; break; }
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    const al = a.length, bl = b.length;
+    if (al === 0) return bl;
+    if (bl === 0) return al;
+    let prev = new Array(bl + 1);
+    for (let j = 0; j <= bl; j++) prev[j] = j;
+    for (let i = 1; i <= al; i++) {
+      const cur = [i];
+      for (let j = 1; j <= bl; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
       }
-      if (ok && (!best || subs < best.subs)) {
-        best = { pos: start, subs };
-        if (subs === 0) break;
-      }
+      prev = cur;
     }
-    return best;
+    return prev[bl];
+  }
+  function escapeHtml(s) {
+    return (s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
 
-  // Single entry point for "does this candidate window satisfy the query?".
-  // Tried in order of decreasing confidence: exact -> confusion -> fuzzy.
-  // Returns null, or { pos, len, confused, fuzzy } describing how it matched.
-  function matchWindow(norm, query) {
-    if (!norm || !query.norm) return null;
-    const q = query.norm;
-
-    if (query.exact) {
-      if (norm === q) return { pos: 0, len: norm.length, confused: false, fuzzy: false };
-      if (norm.length === q.length) {
-        const hit = confusableIndexOf(norm, q);
-        if (hit) return { pos: 0, len: norm.length, confused: hit.subs > 0, fuzzy: false };
-      }
-      return null;
-    }
-
-    const exactPos = norm.indexOf(q);
-    if (exactPos !== -1) return { pos: exactPos, len: q.length, confused: false, fuzzy: false };
-
-    const hit = confusableIndexOf(norm, q);
-    if (hit) return { pos: hit.pos, len: q.length, confused: true, fuzzy: false };
-
-    if (query.fuzzy) {
-      const maxDist = q.length <= 4 ? 1 : 2;
-      if (Math.abs(norm.length - q.length) <= maxDist && levenshtein(norm, q) <= maxDist) {
-        return { pos: 0, len: norm.length, confused: false, fuzzy: true };
-      }
-    }
-    return null;
-  }
-
-  // =======================================================================
-  // OCR corrections ("teach it the right answer")
-  //
-  // Tesseract can't be retrained in the browser, so instead of pretending to
-  // learn we keep a dictionary: normalized-raw-OCR-text -> what it really says.
-  // A correction entered once is applied to EVERY occurrence of that same
-  // misread string, on every page and in every future search — including in
-  // documents opened later, since the dictionary is persisted. That's what
-  // makes a 0%-confidence garbled read findable by its true tag from then on.
-  //
-  // Persistence is best-effort: some browsers give file:// pages no usable
-  // localStorage, in which case corrections simply stay session-only.
-  // =======================================================================
-  const CORRECTIONS_KEY = 'pidTagFinder.ocrCorrections.v1';
-  let corrections = new Map();   // normalize(rawOcrText) -> corrected string
-
+  // src/app/corrections.js
+  var CORRECTIONS_KEY = "pidTagFinder.ocrCorrections.v1";
+  var corrections = /* @__PURE__ */ new Map();
   function loadCorrections() {
     try {
       const raw = window.localStorage.getItem(CORRECTIONS_KEY);
       if (raw) corrections = new Map(JSON.parse(raw));
     } catch (err) {
-      console.warn('Corrections could not be loaded (session-only):', err);
+      console.warn("Corrections could not be loaded (session-only):", err);
     }
   }
   function saveCorrections() {
     try {
       window.localStorage.setItem(CORRECTIONS_KEY, JSON.stringify([...corrections]));
     } catch (err) {
-      console.warn('Corrections could not be saved (session-only):', err);
+      console.warn("Corrections could not be saved (session-only):", err);
     }
   }
   function setCorrection(rawText, correctedText) {
@@ -613,337 +522,238 @@
   }
   function updateCorrectionsBar() {
     const n = corrections.size;
-    correctionsBar.classList.toggle('visible', n > 0);
-    correctionsCount.textContent = n + ' saved OCR correction' + (n === 1 ? '' : 's') + ' applied';
+    correctionsBar.classList.toggle("visible", n > 0);
+    correctionsCount.textContent = n + " saved OCR correction" + (n === 1 ? "" : "s") + " applied";
   }
-  clearCorrectionsBtn.addEventListener('click', () => {
+  function clearCorrections() {
     corrections.clear();
     saveCorrections();
     updateCorrectionsBar();
-    if (currentQuery.norm) runFullSearch();
-  });
-  loadCorrections();
-  updateCorrectionsBar();
-
-  function applyMatrix(m, x, y) {
-    return [m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]];
   }
 
-  // A text item's .width/.height from pdf.js getTextContent() are already in
-  // page-space units (they are NOT glyph-space units to be re-multiplied by
-  // the transform's a/d). So the quad is built by walking `width` along the
-  // transform's rotated x-axis and `height` along its rotated y-axis, from
-  // the baseline origin (transform[4], transform[5]) — then that PDF-space
-  // quad is mapped to canvas pixels via the viewport transform.
+  // src/lib/confusion.js
+  var CONFUSION_CLASSES = ["0OQD", "1IL", "2Z", "5S", "6G", "8B", "7T", "4A"];
+  var CONFUSION_OF = (() => {
+    const m = /* @__PURE__ */ new Map();
+    CONFUSION_CLASSES.forEach((cls, i) => {
+      for (const ch of cls) m.set(ch, i);
+    });
+    return m;
+  })();
+  function charsConfusable(a, b) {
+    if (a === b) return true;
+    const ca = CONFUSION_OF.get(a);
+    return ca !== void 0 && ca === CONFUSION_OF.get(b);
+  }
+  function confusionBudget(len) {
+    if (len < 4) return 0;
+    return Math.max(1, Math.round(len * 0.34));
+  }
+  function confusableIndexOf(hay, needle) {
+    const n = needle.length, budget = confusionBudget(n);
+    if (!n || n > hay.length || budget === 0) return null;
+    let best = null;
+    for (let start = 0; start + n <= hay.length; start++) {
+      let subs = 0, ok = true;
+      for (let k = 0; k < n; k++) {
+        const a = hay[start + k], b = needle[k];
+        if (a === b) continue;
+        if (!charsConfusable(a, b) || ++subs > budget) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok && (!best || subs < best.subs)) {
+        best = { pos: start, subs };
+        if (subs === 0) break;
+      }
+    }
+    return best;
+  }
+
+  // src/lib/matching.js
+  function matchWindow(norm, query) {
+    if (!norm || !query.norm) return null;
+    const q = query.norm;
+    if (query.exact) {
+      if (norm === q) return { pos: 0, len: norm.length, confused: false, fuzzy: false };
+      if (norm.length === q.length) {
+        const hit2 = confusableIndexOf(norm, q);
+        if (hit2) return { pos: 0, len: norm.length, confused: hit2.subs > 0, fuzzy: false };
+      }
+      return null;
+    }
+    const exactPos = norm.indexOf(q);
+    if (exactPos !== -1) return { pos: exactPos, len: q.length, confused: false, fuzzy: false };
+    const hit = confusableIndexOf(norm, q);
+    if (hit) return { pos: hit.pos, len: q.length, confused: true, fuzzy: false };
+    if (query.fuzzy) {
+      const maxDist = q.length <= 4 ? 1 : 2;
+      if (Math.abs(norm.length - q.length) <= maxDist && levenshtein(norm, q) <= maxDist) {
+        return { pos: 0, len: norm.length, confused: false, fuzzy: true };
+      }
+    }
+    return null;
+  }
+
+  // src/app/config.js
+  var OCR_SCALE = 3.5;
+  var TEXT_LEN_THRESHOLD = 20;
+  var JOIN_GAP_FACTOR = 2.2;
+  var MAX_WINDOW = 6;
+
+  // src/lib/geometry.js
+  function applyMatrix(m, x, y) {
+    return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+  }
   function itemQuadPdfSpace(item) {
     const t = item.transform;
     const fontScale = Math.hypot(t[0], t[1]) || 1;
-    const dirX = t[0]/fontScale, dirY = t[1]/fontScale;
-    const upX = t[2]/fontScale, upY = t[3]/fontScale;
+    const dirX = t[0] / fontScale, dirY = t[1] / fontScale;
+    const upX = t[2] / fontScale, upY = t[3] / fontScale;
     const x0 = t[4], y0 = t[5];
     const w = item.width, h = item.height;
     return [
       [x0, y0],
-      [x0 + w*dirX, y0 + w*dirY],
-      [x0 + w*dirX + h*upX, y0 + w*dirY + h*upY],
-      [x0 + h*upX, y0 + h*upY]
+      [x0 + w * dirX, y0 + w * dirY],
+      [x0 + w * dirX + h * upX, y0 + w * dirY + h * upY],
+      [x0 + h * upX, y0 + h * upY]
     ];
   }
   function itemQuadCanvas(item, viewport) {
-    return itemQuadPdfSpace(item).map(([x,y]) => applyMatrix(viewport.transform, x, y));
+    return itemQuadPdfSpace(item).map(([x, y]) => applyMatrix(viewport.transform, x, y));
   }
-
   function boundsOfPoints(pts) {
-    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    for (const [x,y] of pts) {
-      if (x<minX) minX=x; if (x>maxX) maxX=x;
-      if (y<minY) minY=y; if (y>maxY) maxY=y;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
     }
-    return {minX,minY,maxX,maxY};
+    return { minX, minY, maxX, maxY };
+  }
+  function inverseRotatePoint(x, y, degrees, W, H) {
+    if (degrees === 0) return [x, y];
+    if (degrees === 180) return [W - x, H - y];
+    if (degrees === 90) return [y, H - x];
+    if (degrees === 270) return [W - y, x];
+    return [x, y];
+  }
+  function readingAxis(b, degrees) {
+    if (degrees === 90) return { rs: -b.y1, re: -b.y0, rh: b.x1 - b.x0 };
+    if (degrees === 180) return { rs: -b.x1, re: -b.x0, rh: b.y1 - b.y0 };
+    if (degrees === 270) return { rs: b.y0, re: b.y1, rh: b.x1 - b.x0 };
+    return { rs: b.x0, re: b.x1, rh: b.y1 - b.y0 };
+  }
+  function mapBoxBack(bbox, degrees, W, H) {
+    const corners = [
+      [bbox.x0, bbox.y0],
+      [bbox.x1, bbox.y0],
+      [bbox.x1, bbox.y1],
+      [bbox.x0, bbox.y1]
+    ].map(([x, y]) => inverseRotatePoint(x, y, degrees, W, H));
+    const b = boundsOfPoints(corners);
+    return { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY };
   }
 
-  function levenshtein(a, b) {
-    if (a === b) return 0;
-    const al = a.length, bl = b.length;
-    if (al === 0) return bl;
-    if (bl === 0) return al;
-    let prev = new Array(bl+1);
-    for (let j=0;j<=bl;j++) prev[j]=j;
-    for (let i=1;i<=al;i++) {
-      const cur = [i];
-      for (let j=1;j<=bl;j++) {
-        const cost = a[i-1]===b[j-1] ? 0 : 1;
-        cur[j] = Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost);
-      }
-      prev = cur;
-    }
-    return prev[bl];
-  }
-
-  function escapeHtml(s) {
-    return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  // =======================================================================
-  // PDF loading
-  // =======================================================================
-  fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    await loadPdf(file);
-  });
-
-  // ---- Drag & drop anywhere in the window ----
-  // dragenter/dragleave fire for every child element the cursor crosses, so a
-  // simple depth counter keeps the overlay from flickering mid-drag.
-  let dragDepth = 0;
-  function eventHasFiles(e) {
-    const dt = e.dataTransfer;
-    if (!dt) return false;
-    if (dt.types) return Array.prototype.indexOf.call(dt.types, 'Files') !== -1;
-    return false;
-  }
-  window.addEventListener('dragenter', (e) => {
-    if (!eventHasFiles(e)) return;
-    e.preventDefault();
-    dragDepth++;
-    dropOverlay.classList.add('active');
-  });
-  window.addEventListener('dragover', (e) => {
-    if (!eventHasFiles(e)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-  });
-  window.addEventListener('dragleave', (e) => {
-    if (!eventHasFiles(e)) return;
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) dropOverlay.classList.remove('active');
-  });
-  window.addEventListener('drop', async (e) => {
-    if (!eventHasFiles(e)) return;
-    e.preventDefault();
-    dragDepth = 0;
-    dropOverlay.classList.remove('active');
-    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
-    const pdf = files.find(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
-    if (!pdf) {
-      fileInfo.textContent = 'That file isn’t a PDF — drop a .pdf drawing instead.';
-      return;
-    }
-    await loadPdf(pdf);
-  });
-
-  async function loadPdf(file) {
-    resetDocumentState();
-    fileInfo.textContent = 'Loading ' + file.name + ' …';
+  // src/lib/preprocess.js
+  var makeCanvas = () => document.createElement("canvas");
+  function preprocessForOcr(srcCanvas) {
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const ctx = srcCanvas.getContext("2d", { willReadFrequently: true });
+    let img;
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-      pdfDoc = await loadingTask.promise;
-      numPages = pdfDoc.numPages;
-      fileInfo.textContent = file.name + ' — ' + numPages + ' page' + (numPages===1?'':'s');
-
-      for (let p=1; p<=numPages; p++) {
-        pageData.set(p, {
-          status: 'pending', source: null,
-          textItems: null, lineGroups: null,
-          ocrWords: null, ocrLines: null,
-          thumbCanvas: null, thumbScale: null,
-          rawLen: 0
-        });
-      }
-
-      emptyViewer.style.display = 'none';
-      canvasStage.style.display = '';
-      toolbar.style.display = '';
-      searchInput.disabled = false;
-      searchBtn.disabled = false;
-      cancelProcBtn.disabled = false;
-      pageCountLabel.textContent = '/ ' + numPages;
-      pageNumInput.value = '1';
-      currentPage = 1;
-
-      await renderPage(1);
-      updateProcSummary();
-      startBackgroundProcessing();
+      img = ctx.getImageData(0, 0, w, h);
     } catch (err) {
-      console.error(err);
-      fileInfo.textContent = 'Failed to load PDF: ' + err.message;
+      console.warn("Preprocessing skipped (canvas read failed):", err);
+      return srcCanvas;
     }
-  }
-
-  function resetDocumentState() {
-    docEpoch++;   // invalidate any background work from the previous document
-    pdfDoc = null; numPages = 0; currentPage = 1; scale = 1.5;
-    pageProxyCache.clear(); pageData.clear();
-    lastResults = []; activeResultIndex = -1;
-    processingCancelled = true; skipCurrentPageRequested = false; isBackgroundRunning = false;
-    if (currentRenderTask) {
-      try { currentRenderTask.cancel(); } catch (err) { /* already finished */ }
-      currentRenderTask = null;
+    const px = img.data;
+    const n = w * h;
+    const grey = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      grey[i] = px[j] * 77 + px[j + 1] * 151 + px[j + 2] * 28 >> 8;
     }
-    if (tickerHandle) { clearInterval(tickerHandle); tickerHandle = null; }
-    if (ocrWorker) { ocrWorker.terminate().catch(()=>{}); ocrWorker = null; }
-    resultsList.innerHTML = '<div class="empty-note">Load a PDF and run a search to see matches here.</div>';
-    resultsCount.textContent = 'Results';
-    exportCsvBtn.disabled = true;
-    searchSummary.textContent = '';
-    searchInput.disabled = true; searchBtn.disabled = true;
-    skipPageBtn.disabled = true; cancelProcBtn.disabled = true;
-    toolbar.style.display = 'none';
-    canvasStage.style.display = 'none';
-    emptyViewer.style.display = '';
-    hidePageProgressBanner();
-    procBarInner.classList.remove('processing');
-    procSpinner.classList.remove('active');
-  }
-
-  function getPageProxy(pageNum) {
-    if (!pageProxyCache.has(pageNum)) {
-      pageProxyCache.set(pageNum, pdfDoc.getPage(pageNum));
-    }
-    return pageProxyCache.get(pageNum);
-  }
-
-  // =======================================================================
-  // Text-layer extraction + line grouping (handles rotated text via transforms)
-  // =======================================================================
-  // Scanned P&IDs sometimes carry a *little* real text (title block fields,
-  // a drawing number stamped in by whatever produced the PDF) sitting on top
-  // of a raster image of the actual drawing. If we only looked at character
-  // count we'd mistake that sliver of real text for a full text layer and
-  // skip OCR entirely — silently missing every tag that only exists as
-  // pixels. So: any embedded raster image on the page means "this needs
-  // OCR too", regardless of how much real text also happens to be present.
-  async function pageHasImage(page) {
-    try {
-      const opList = await page.getOperatorList();
-      const OPS = pdfjsLib.OPS;
-      for (const fn of opList.fnArray) {
-        if (fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject || fn === OPS.paintImageXObjectRepeat) {
-          return true;
-        }
-      }
-    } catch (err) {
-      console.warn('operator list scan failed on page', err);
-    }
-    return false;
-  }
-
-  // Returns true if the page has enough of a real text layer that OCR can be
-  // skipped entirely (fast path for native CAD/vector exports).
-  async function extractTextLayer(pageNum) {
-    const page = await getPageProxy(pageNum);
-    const textContent = await page.getTextContent();
-    const items = textContent.items.filter(it => it.str && it.str.trim().length > 0);
-
-    let rawLen = 0;
-    for (const it of items) rawLen += it.str.length;
-
-    const data = pageData.get(pageNum);
-    data.textItems = items;
-    data.rawLen = rawLen;
-    if (items.length) {
-      data.lineGroups = groupItemsIntoLines(items);
-    }
-
-    const hasImage = await pageHasImage(page);
-    const confidentTextLayer = rawLen > TEXT_LEN_THRESHOLD && !hasImage;
-    if (confidentTextLayer) {
-      data.status = 'text-done';
-    }
-    return confidentTextLayer;
-  }
-
-  function groupItemsIntoLines(items) {
-    // Each item has .transform [a,b,c,d,e,f]. Rotation angle + baseline point
-    // let us cluster items that sit on the same (possibly rotated) line.
-    const enriched = items.map((it, idx) => {
-      const t = it.transform;
-      const angle = Math.atan2(t[1], t[0]);
-      const bx = t[4], by = t[5];
-      const cos = Math.cos(angle), sin = Math.sin(angle);
-      const parallel = bx*cos + by*sin;
-      const perp = -bx*sin + by*cos;
-      const fontSize = Math.hypot(t[0], t[1]) || 1;
-      return { idx, item: it, angle, parallel, perp, fontSize };
-    });
-
-    const buckets = new Map();
-    const angleStep = Math.PI / 180; // 1 degree buckets
-    for (const e of enriched) {
-      const angleKey = Math.round(e.angle / angleStep);
-      // perp bucket size scaled to font size so lines of small/large text both cluster sensibly
-      const perpKey = Math.round(e.perp / Math.max(2, e.fontSize * 0.5));
-      const key = angleKey + '_' + perpKey;
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(e);
-    }
-
-    const lines = [];
-    for (const bucket of buckets.values()) {
-      bucket.sort((a,b) => a.parallel - b.parallel);
-      lines.push(bucket);
-    }
-    return lines;
-  }
-
-  // Build match "windows" (size 1..3 consecutive items on a line) and test against query.
-  function searchTextLayer(pageNum, query) {
-    const data = pageData.get(pageNum);
-    if (!data || !data.lineGroups) return [];
-    const results = [];
-
-    for (const line of data.lineGroups) {
-      const covered = new Set();
-      for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
-        for (let start = 0; start + winSize <= line.length; start++) {
-          const windowEntries = line.slice(start, start + winSize);
-          const idxs = windowEntries.map(e => e.idx);
-          if (idxs.some(i => covered.has(i))) continue;
-
-          if (winSize > 1) {
-            // require entries to be reasonably close together to justify joining
-            let tooFar = false;
-            for (let k=0;k<windowEntries.length-1;k++) {
-              const a = windowEntries[k], b = windowEntries[k+1];
-              const gap = b.parallel - (a.parallel + a.item.width);
-              if (gap > a.fontSize * JOIN_GAP_FACTOR) { tooFar = true; break; }
-            }
-            if (tooFar) continue;
-          }
-
-          const text = windowEntries.map(e => e.item.str).join('');
-          const norm = normalize(text);
-          if (!norm) continue;
-
-          // A PDF text layer is not automatically trustworthy: drawings that were
-          // scanned and re-OCR'd upstream carry a text layer with exactly the same
-          // glyph confusions as our own OCR, so it gets the same matcher.
-          const m = matchWindow(norm, query);
-          if (!m) continue;
-
-          idxs.forEach(i => covered.add(i));
-          results.push({
-            page: pageNum, source: 'text', text: text,
-            itemIndices: idxs, confidence: null,
-            fuzzy: m.fuzzy, confused: m.confused, matchPos: m.pos, matchLen: m.len
-          });
-        }
+    const radius = clamp(Math.round(Math.min(w, h) / 90), 6, 60);
+    const BIAS = 0.9;
+    const hmean = new Uint8Array(n);
+    const rowPrefix = new Uint32Array(w + 1);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) rowPrefix[x + 1] = rowPrefix[x] + grey[row + x];
+      for (let x = 0; x < w; x++) {
+        const x0 = x - radius < 0 ? 0 : x - radius;
+        const x1 = x + radius >= w ? w - 1 : x + radius;
+        hmean[row + x] = (rowPrefix[x1 + 1] - rowPrefix[x0]) / (x1 - x0 + 1);
       }
     }
-    return results;
+    const colSum = new Uint32Array(w);
+    let top = 0, bottom = -1;
+    const addRow = (y) => {
+      const r = y * w;
+      for (let x = 0; x < w; x++) colSum[x] += hmean[r + x];
+    };
+    const subRow = (y) => {
+      const r = y * w;
+      for (let x = 0; x < w; x++) colSum[x] -= hmean[r + x];
+    };
+    for (let y = 0; y < h; y++) {
+      const wantTop = y - radius < 0 ? 0 : y - radius;
+      const wantBottom = y + radius >= h ? h - 1 : y + radius;
+      while (bottom < wantBottom) addRow(++bottom);
+      while (top < wantTop) subRow(top++);
+      const count = bottom - top + 1;
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const i = row + x;
+        const v = grey[i] < colSum[x] / count * BIAS ? 0 : 255;
+        const j = i * 4;
+        px[j] = px[j + 1] = px[j + 2] = v;
+        px[j + 3] = 255;
+      }
+    }
+    const out = makeCanvas();
+    out.width = w;
+    out.height = h;
+    out.getContext("2d").putImageData(img, 0, 0);
+    return out;
+  }
+  function rotateCanvas(srcCanvas, degrees) {
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const out = makeCanvas();
+    const ctx = out.getContext("2d");
+    if (degrees === 0) {
+      out.width = w;
+      out.height = h;
+      ctx.drawImage(srcCanvas, 0, 0);
+    } else if (degrees === 180) {
+      out.width = w;
+      out.height = h;
+      ctx.translate(w, h);
+      ctx.rotate(Math.PI);
+      ctx.drawImage(srcCanvas, 0, 0);
+    } else if (degrees === 90) {
+      out.width = h;
+      out.height = w;
+      ctx.translate(h, 0);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(srcCanvas, 0, 0);
+    } else if (degrees === 270) {
+      out.width = h;
+      out.height = w;
+      ctx.translate(0, w);
+      ctx.rotate(-Math.PI / 2);
+      ctx.drawImage(srcCanvas, 0, 0);
+    }
+    return out;
   }
 
-  // =======================================================================
-  // OCR fallback (4-rotation-pass) — coordinate remapping between rotated
-  // canvases and the "normal" (0deg) page canvas is done with plain pixel
-  // math since rotations are exact 90deg multiples.
-  // =======================================================================
+  // src/app/ocr.js
   async function ensureOcrWorker() {
-    if (!ocrWorker) {
-      ocrWorker = await Tesseract.createWorker('eng');
-      await ocrWorker.setParameters({
+    if (!S.ocrWorker) {
+      S.ocrWorker = await Tesseract.createWorker("eng");
+      await S.ocrWorker.setParameters({
         // P&ID sheets are mostly line art with sparse, scattered labels, not
         // paragraphs — SPARSE_TEXT skips Tesseract's column/block layout
         // analysis (the slow, and on a drawing often wrong, part of the
@@ -956,269 +766,114 @@
         // which upper-cases anyway, so a lowercase alphabet can never help a match
         // — it only gives the decoder extra ways to be wrong (picking 'l' over '1',
         // 'o' over '0'). Removing it strictly shrinks the error space.
-        tessedit_char_whitelist:
-          "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,:()#&+ ",
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,:()#&+ ",
         // Tag callouts are standalone strings, not prose — Tesseract's built-in
         // English dictionary can only drag a correct read toward a real word.
-        load_system_dawg: '0',
-        load_freq_dawg: '0',
+        load_system_dawg: "0",
+        load_freq_dawg: "0"
       });
     }
-    return ocrWorker;
+    return S.ocrWorker;
   }
-
-  // =======================================================================
-  // Pre-OCR image conditioning
-  //
-  // A P&ID renders as thin dark strokes on white with almost no mid-tones, but
-  // antialiasing at render time turns every 1px CAD stroke into a soft grey
-  // smear. Tesseract's own global (Otsu) threshold then has to pick one cutoff
-  // for the whole sheet, which either thickens characters until counters fill
-  // in (8 -> B, 6 -> G) or thins them until strokes break (5 -> S).
-  //
-  // Local adaptive thresholding picks a cutoff per pixel from the mean of its
-  // neighbourhood, computed in O(1) per pixel from an integral image. Character
-  // strokes stay crisp regardless of what surrounds them, which is exactly the
-  // condition the confusion classes above arise from.
-  // =======================================================================
-  function preprocessForOcr(srcCanvas) {
-    const w = srcCanvas.width, h = srcCanvas.height;
-    const ctx = srcCanvas.getContext('2d', { willReadFrequently: true });
-    let img;
-    try {
-      img = ctx.getImageData(0, 0, w, h);
-    } catch (err) {
-      console.warn('Preprocessing skipped (canvas read failed):', err);
-      return srcCanvas;
-    }
-    const px = img.data;
-    const n = w * h;
-
-    // Luminance plane (integer weights ~ Rec.601).
-    const grey = new Uint8Array(n);
-    for (let i = 0, j = 0; i < n; i++, j += 4) {
-      grey[i] = (px[j] * 77 + px[j+1] * 151 + px[j+2] * 28) >> 8;
-    }
-
-    // Window sized to a few character heights at OCR_SCALE, and bounded so the
-    // cost stays predictable on very large sheets.
-    const radius = clamp(Math.round(Math.min(w, h) / 90), 6, 60);
-    // Bias below the local mean so the antialiasing halo around a stroke is
-    // dropped rather than fattening the stroke it surrounds.
-    const BIAS = 0.90;
-
-    // The mean over a square window is separable: a horizontal box mean followed
-    // by a vertical one. Done this way it costs two O(1)-per-pixel passes and two
-    // byte-per-pixel buffers. (A full integral image would be simpler to write,
-    // but needs a float per pixel — several hundred MB on an A1 sheet rendered
-    // at OCR_SCALE, which is exactly the size of drawing this tool is for.)
-    const hmean = new Uint8Array(n);
-    const rowPrefix = new Uint32Array(w + 1);
-    for (let y = 0; y < h; y++) {
-      const row = y * w;
-      for (let x = 0; x < w; x++) rowPrefix[x+1] = rowPrefix[x] + grey[row + x];
-      for (let x = 0; x < w; x++) {
-        const x0 = x - radius < 0 ? 0 : x - radius;
-        const x1 = x + radius >= w ? w - 1 : x + radius;
-        hmean[row + x] = (rowPrefix[x1+1] - rowPrefix[x0]) / (x1 - x0 + 1);
-      }
-    }
-
-    // Vertical pass as a sliding window over whole rows, so memory access stays
-    // sequential (a per-column walk over a 50-megapixel buffer thrashes cache).
-    const colSum = new Uint32Array(w);
-    let top = 0, bottom = -1;
-    const addRow = (y) => { const r = y * w; for (let x = 0; x < w; x++) colSum[x] += hmean[r + x]; };
-    const subRow = (y) => { const r = y * w; for (let x = 0; x < w; x++) colSum[x] -= hmean[r + x]; };
-
-    for (let y = 0; y < h; y++) {
-      const wantTop = y - radius < 0 ? 0 : y - radius;
-      const wantBottom = y + radius >= h ? h - 1 : y + radius;
-      while (bottom < wantBottom) addRow(++bottom);
-      while (top < wantTop) subRow(top++);
-      const count = bottom - top + 1;
-      const row = y * w;
-      for (let x = 0; x < w; x++) {
-        const i = row + x;
-        const v = grey[i] < (colSum[x] / count) * BIAS ? 0 : 255;
-        const j = i * 4;
-        px[j] = px[j+1] = px[j+2] = v;
-        px[j+3] = 255;
-      }
-    }
-
-    const out = document.createElement('canvas');
-    out.width = w; out.height = h;
-    out.getContext('2d').putImageData(img, 0, 0);
-    return out;
-  }
-
-  function rotateCanvas(srcCanvas, degrees) {
-    const w = srcCanvas.width, h = srcCanvas.height;
-    const out = document.createElement('canvas');
-    const ctx = out.getContext('2d');
-    if (degrees === 0) {
-      out.width = w; out.height = h;
-      ctx.drawImage(srcCanvas, 0, 0);
-    } else if (degrees === 180) {
-      out.width = w; out.height = h;
-      ctx.translate(w, h); ctx.rotate(Math.PI);
-      ctx.drawImage(srcCanvas, 0, 0);
-    } else if (degrees === 90) {
-      out.width = h; out.height = w;
-      ctx.translate(h, 0); ctx.rotate(Math.PI/2);
-      ctx.drawImage(srcCanvas, 0, 0);
-    } else if (degrees === 270) {
-      out.width = h; out.height = w;
-      ctx.translate(0, w); ctx.rotate(-Math.PI/2);
-      ctx.drawImage(srcCanvas, 0, 0);
-    }
-    return out;
-  }
-
-  // Map a point from a rotated (Cθ) canvas back into the original (C0) canvas.
-  // W,H = dimensions of C0 (the un-rotated render).
-  function inverseRotatePoint(x, y, degrees, W, H) {
-    if (degrees === 0) return [x, y];
-    if (degrees === 180) return [W - x, H - y];
-    if (degrees === 90) return [y, H - x];     // Cθ size is H x W
-    if (degrees === 270) return [W - y, x];    // Cθ size is H x W
-    return [x, y];
-  }
-
-  // Project a page-space box onto the axis the text runs along for this pass, so
-  // ordering and gap tests are one piece of rotation-independent arithmetic:
-  //   rs/re = start/end along the reading direction (always increasing)
-  //   rh    = character height, measured perpendicular to that direction
-  function readingAxis(b, degrees) {
-    if (degrees === 90)  return { rs: -b.y1, re: -b.y0, rh: b.x1 - b.x0 };
-    if (degrees === 180) return { rs: -b.x1, re: -b.x0, rh: b.y1 - b.y0 };
-    if (degrees === 270) return { rs:  b.y0, re:  b.y1, rh: b.x1 - b.x0 };
-    return { rs: b.x0, re: b.x1, rh: b.y1 - b.y0 };
-  }
-
-  function mapBoxBack(bbox, degrees, W, H) {
-    const corners = [
-      [bbox.x0, bbox.y0], [bbox.x1, bbox.y0], [bbox.x1, bbox.y1], [bbox.x0, bbox.y1]
-    ].map(([x,y]) => inverseRotatePoint(x, y, degrees, W, H));
-    const b = boundsOfPoints(corners);
-    return { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY };
-  }
-
   async function runOcrForPage(pageNum, onProgress) {
-    const epoch = docEpoch;
-    const data = pageData.get(pageNum);
+    const epoch = S.docEpoch;
+    const data = S.pageData.get(pageNum);
     const page = await getPageProxy(pageNum);
     const viewport = page.getViewport({ scale: OCR_SCALE });
-
-    const base = document.createElement('canvas');
+    const base = document.createElement("canvas");
     base.width = Math.ceil(viewport.width);
     base.height = Math.ceil(viewport.height);
-    const baseCtx = base.getContext('2d');
+    const baseCtx = base.getContext("2d");
     await page.render({ canvasContext: baseCtx, viewport }).promise;
-
-    // Thumbnails show the real drawing, so they keep the clean render; only the
-    // copy handed to Tesseract is binarized.
     data.thumbCanvas = base;
     data.thumbScale = OCR_SCALE;
-
     const ocrBase = preprocessForOcr(base);
-
     const W = base.width, H = base.height;
-    // Landscape-only by default: a single pass at the page's native orientation
-    // is ~4x faster. "Also scan rotated/vertical text" opts back into the full
-    // 4-pass sweep for drawings with vertical line labels, at that time cost.
     const rotations = rotatedTextToggle.checked ? [0, 90, 180, 270] : [0];
-    const allWords = [];   // flattened, coordinates already mapped back to C0 space
+    const allWords = [];
     const worker = await ensureOcrWorker();
-
     for (let i = 0; i < rotations.length; i++) {
-      if (processingCancelled || skipCurrentPageRequested || epoch !== docEpoch) break;
+      if (S.processingCancelled || S.skipCurrentPageRequested || epoch !== S.docEpoch) break;
       const deg = rotations[i];
-      onProgress(i+1, rotations.length);
-
+      onProgress(i + 1, rotations.length);
       const rotated = deg === 0 ? ocrBase : rotateCanvas(ocrBase, deg);
       let result;
       try {
         result = await worker.recognize(rotated);
       } catch (err) {
-        console.warn('OCR pass failed', pageNum, deg, err);
+        console.warn("OCR pass failed", pageNum, deg, err);
         continue;
       }
-      const lines = (result.data && result.data.lines) || [];
+      const lines = result.data && result.data.lines || [];
       for (const line of lines) {
         const mappedWords = [];
-        for (const w of (line.words || [])) {
-          const text = (w.text || '').trim();
+        for (const w of line.words || []) {
+          const text = (w.text || "").trim();
           if (!text) continue;
           const mapped = mapBoxBack(w.bbox, deg, W, H);
           mappedWords.push({
-            text, bbox: mapped, confidence: w.confidence, rotation: deg,
+            text,
+            bbox: mapped,
+            confidence: w.confidence,
+            rotation: deg,
             ...readingAxis(mapped, deg)
           });
         }
         if (mappedWords.length) {
-          // Sort along the direction the text is READ, not along page-x. For the
-          // 90/180/270 passes a word's reading order maps to a decreasing or
-          // perpendicular axis once its box is projected back into page space, so
-          // sorting by x0 (as a horizontal-only reader would) silently scrambles
-          // the words of every rotated tag before they are ever joined.
-          mappedWords.sort((a,b) => a.rs - b.rs);
+          mappedWords.sort((a, b) => a.rs - b.rs);
           allWords.push({ rotation: deg, words: mappedWords });
         }
       }
     }
-
-    data.ocrLines = allWords; // array of { rotation, words:[{text,bbox,confidence,rotation}] }
+    data.ocrLines = allWords;
     return data;
   }
-
   function searchOcr(pageNum, query) {
-    const data = pageData.get(pageNum);
+    const data = S.pageData.get(pageNum);
     if (!data || !data.ocrLines) return [];
     const results = [];
-
     for (const line of data.ocrLines) {
       const words = line.words;
-      const covered = new Set();
+      const covered = /* @__PURE__ */ new Set();
       for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
         for (let start = 0; start + winSize <= words.length; start++) {
           const win = words.slice(start, start + winSize);
-          const wIdxs = win.map((_,k) => start+k);
-          if (wIdxs.some(i => covered.has(i))) continue;
-
+          const wIdxs = win.map((_, k) => start + k);
+          if (wIdxs.some((i) => covered.has(i))) continue;
           if (winSize > 1) {
             let tooFar = false;
-            for (let k=0;k<win.length-1;k++) {
-              const a = win[k], b = win[k+1];
-              // Measured along the reading axis, so this is the true inter-word
-              // gap for vertical and upside-down text as well as horizontal.
-              const gap = b.rs - a.re;
-              if (gap > a.rh * JOIN_GAP_FACTOR) { tooFar = true; break; }
+            for (let k = 0; k < win.length - 1; k++) {
+              const a = win[k], b2 = win[k + 1];
+              const gap = b2.rs - a.re;
+              if (gap > a.rh * JOIN_GAP_FACTOR) {
+                tooFar = true;
+                break;
+              }
             }
             if (tooFar) continue;
           }
-
-          const rawText = win.map(w => w.text).join(win.length>1 ? ' ' : '');
-          // A saved correction replaces what OCR *thought* it read, so this
-          // window is matched (and displayed) as the tag it really is.
+          const rawText = win.map((w) => w.text).join(win.length > 1 ? " " : "");
           const fixed = getCorrection(rawText);
           const text = fixed || rawText;
           const norm = normalize(text);
           if (!norm) continue;
-
           const m = matchWindow(norm, query);
           if (!m) continue;
-
-          wIdxs.forEach(i => covered.add(i));
-          const b = boundsOfPoints(win.flatMap(w => [[w.bbox.x0,w.bbox.y0],[w.bbox.x1,w.bbox.y1]]));
-          const avgConf = win.reduce((s,w)=>s+w.confidence,0) / win.length;
+          wIdxs.forEach((i) => covered.add(i));
+          const b = boundsOfPoints(win.flatMap((w) => [[w.bbox.x0, w.bbox.y0], [w.bbox.x1, w.bbox.y1]]));
+          const avgConf = win.reduce((s, w) => s + w.confidence, 0) / win.length;
           results.push({
-            page: pageNum, source: 'ocr', text, rawText,
+            page: pageNum,
+            source: "ocr",
+            text,
+            rawText,
             corrected: !!fixed,
             bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
             confidence: avgConf,
-            fuzzy: m.fuzzy, confused: m.confused, matchPos: m.pos, matchLen: m.len
+            fuzzy: m.fuzzy,
+            confused: m.confused,
+            matchPos: m.pos,
+            matchLen: m.len
           });
         }
       }
@@ -1226,372 +881,287 @@
     return results;
   }
 
-  // =======================================================================
-  // Background processing queue: current page first, then in page order.
-  // =======================================================================
-  let tickerHandle = null;
-
+  // src/app/queue.js
   function startBackgroundProcessing() {
-    const epoch = docEpoch;
-    isBackgroundRunning = true;
-    processingCancelled = false;
-    if (!tickerHandle) tickerHandle = setInterval(updateProcSummary, 500);
+    const epoch = S.docEpoch;
+    S.isBackgroundRunning = true;
+    S.processingCancelled = false;
+    if (!S.tickerHandle) S.tickerHandle = setInterval(updateProcSummary, 500);
     runQueue(epoch);
   }
-
   async function runQueue(epoch) {
-    while (!processingCancelled && epoch === docEpoch) {
+    while (!S.processingCancelled && epoch === S.docEpoch) {
       let target = null;
-      const cd = pageData.get(currentPage);
-      if (cd && cd.status === 'pending') target = currentPage;
+      const cd = S.pageData.get(S.currentPage);
+      if (cd && cd.status === "pending") target = S.currentPage;
       if (target === null) {
-        for (let p = 1; p <= numPages; p++) {
-          const d = pageData.get(p);
-          if (d && d.status === 'pending') { target = p; break; }
+        for (let p = 1; p <= S.numPages; p++) {
+          const d = S.pageData.get(p);
+          if (d && d.status === "pending") {
+            target = p;
+            break;
+          }
         }
       }
       if (target === null) break;
       await processPage(target, epoch);
-      await new Promise(r => setTimeout(r, 0)); // yield to keep UI responsive
+      await new Promise((r) => setTimeout(r, 0));
     }
-    // A queue from a superseded document must not touch the current one's UI.
-    if (epoch !== docEpoch) return;
-    isBackgroundRunning = false;
-    if (tickerHandle) { clearInterval(tickerHandle); tickerHandle = null; }
+    if (epoch !== S.docEpoch) return;
+    S.isBackgroundRunning = false;
+    if (S.tickerHandle) {
+      clearInterval(S.tickerHandle);
+      S.tickerHandle = null;
+    }
     updateProcSummary();
     cancelProcBtn.disabled = true;
     skipPageBtn.disabled = true;
   }
-
   async function processPage(pageNum, epoch) {
-    const data = pageData.get(pageNum);
+    const data = S.pageData.get(pageNum);
     if (!data) return;
-    data.status = 'text-extracting';
+    data.status = "text-extracting";
     data.stepStartedAt = Date.now();
     updateProcSummary();
-    if (pageNum === currentPage) updatePageBadge();
-
+    if (pageNum === S.currentPage) updatePageBadge();
     let skipOcr = false;
     try {
       skipOcr = await extractTextLayer(pageNum);
     } catch (err) {
-      console.warn('Text extraction failed on page', pageNum, err);
+      console.warn("Text extraction failed on page", pageNum, err);
     }
-    if (epoch !== docEpoch) return;
-
+    if (epoch !== S.docEpoch) return;
     if (!skipOcr) {
-      data.status = 'ocr-running';
+      data.status = "ocr-running";
       data.ocrPassNum = 0;
       data.stepStartedAt = Date.now();
-      skipCurrentPageRequested = false;
-      if (pageNum === currentPage) { skipPageBtn.disabled = false; updatePageBadge(); }
+      S.skipCurrentPageRequested = false;
+      if (pageNum === S.currentPage) {
+        skipPageBtn.disabled = false;
+        updatePageBadge();
+      }
       try {
         await runOcrForPage(pageNum, (pass, of) => {
-          data.ocrProgressLabel = 'OCR pass ' + pass + ' of ' + of;
+          data.ocrProgressLabel = "OCR pass " + pass + " of " + of;
           data.ocrPassNum = pass;
           data.ocrPassOf = of;
           data.stepStartedAt = Date.now();
           updateProcSummary();
         });
-        data.status = skipCurrentPageRequested ? 'skipped' : 'ocr-done';
+        data.status = S.skipCurrentPageRequested ? "skipped" : "ocr-done";
       } catch (err) {
-        console.error('OCR failed on page', pageNum, err);
-        data.status = 'error';
+        console.error("OCR failed on page", pageNum, err);
+        data.status = "error";
       }
-      skipCurrentPageRequested = false;
-      if (epoch !== docEpoch) return;
-      if (pageNum === currentPage) { skipPageBtn.disabled = true; hidePageProgressBanner(); }
+      S.skipCurrentPageRequested = false;
+      if (epoch !== S.docEpoch) return;
+      if (pageNum === S.currentPage) {
+        skipPageBtn.disabled = true;
+        hidePageProgressBanner();
+      }
     }
-
     updateProcSummary();
-    if (pageNum === currentPage) {
+    if (pageNum === S.currentPage) {
       updatePageBadge();
       await drawHighlights();
     }
-    // if there's an active query, incrementally search this page and merge results
-    if (currentQuery.norm) {
-      const fresh = searchPage(pageNum, currentQuery);
+    if (S.currentQuery.norm) {
+      const fresh = searchPage(pageNum, S.currentQuery);
       mergeFreshResults(pageNum, fresh);
     }
   }
-
   function updateProcSummary() {
     let done = 0, ocrCount = 0, progressCredit = 0;
-    for (let p=1;p<=numPages;p++) {
-      const d = pageData.get(p);
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
       if (!d) continue;
-      const isDone = ['text-done','ocr-done','skipped','error'].includes(d.status);
-      if (isDone) { done++; progressCredit += 1; }
-      else if (d.status === 'ocr-running') progressCredit += Math.min(d.ocrPassNum || 0, 4) / 4;
-      else if (d.status === 'text-extracting') progressCredit += 0.05;
+      const isDone = ["text-done", "ocr-done", "skipped", "error"].includes(d.status);
+      if (isDone) {
+        done++;
+        progressCredit += 1;
+      } else if (d.status === "ocr-running") progressCredit += Math.min(d.ocrPassNum || 0, 4) / 4;
+      else if (d.status === "text-extracting") progressCredit += 0.05;
       if (d.ocrLines) ocrCount++;
     }
-    if (!numPages) {
-      procDetailText.textContent = 'No document loaded.';
-      procBarInner.style.width = '0%';
-      procBarInner.classList.remove('processing');
-      procSpinner.classList.remove('active');
+    if (!S.numPages) {
+      procDetailText.textContent = "No document loaded.";
+      procBarInner.style.width = "0%";
+      procBarInner.classList.remove("processing");
+      procSpinner.classList.remove("active");
       return;
     }
-    const pct = Math.min(100, Math.round(progressCredit/numPages*100));
-    procBarInner.style.width = pct + '%';
-    const anyActive = isBackgroundRunning;
-    procBarInner.classList.toggle('processing', anyActive);
-    procSpinner.classList.toggle('active', anyActive);
-
-    let label = 'Processed ' + done + ' / ' + numPages + ' pages' + (ocrCount ? ' (' + ocrCount + ' via OCR)' : '');
-    const cd = pageData.get(currentPage);
-    if (cd && cd.status === 'ocr-running' && cd.ocrProgressLabel) {
-      const elapsed = Math.round((Date.now() - (cd.stepStartedAt || Date.now())) / 1000);
-      label += ' — page ' + currentPage + ': ' + cd.ocrProgressLabel + ' (running ' + elapsed + 's)';
-      showPageProgressBanner(currentPage, cd.ocrProgressLabel + ' — running ' + elapsed + 's');
-    } else if (cd && cd.status === 'text-extracting') {
-      label += ' — page ' + currentPage + ': extracting text';
+    const pct = Math.min(100, Math.round(progressCredit / S.numPages * 100));
+    procBarInner.style.width = pct + "%";
+    const anyActive = S.isBackgroundRunning;
+    procBarInner.classList.toggle("processing", anyActive);
+    procSpinner.classList.toggle("active", anyActive);
+    let label = "Processed " + done + " / " + S.numPages + " pages" + (ocrCount ? " (" + ocrCount + " via OCR)" : "");
+    const cd = S.pageData.get(S.currentPage);
+    if (cd && cd.status === "ocr-running" && cd.ocrProgressLabel) {
+      const elapsed = Math.round((Date.now() - (cd.stepStartedAt || Date.now())) / 1e3);
+      label += " \u2014 page " + S.currentPage + ": " + cd.ocrProgressLabel + " (running " + elapsed + "s)";
+      showPageProgressBanner(S.currentPage, cd.ocrProgressLabel + " \u2014 running " + elapsed + "s");
+    } else if (cd && cd.status === "text-extracting") {
+      label += " \u2014 page " + S.currentPage + ": extracting text";
     } else {
       hidePageProgressBanner();
     }
     procDetailText.textContent = label;
   }
-
   function showPageProgressBanner(pageNum, text) {
-    pageProgressBanner.classList.add('visible');
-    pageProgressSpinner.classList.add('active');
-    pageProgressText.textContent = 'Page ' + pageNum + ' of ' + numPages + ': ' + text;
+    pageProgressBanner.classList.add("visible");
+    pageProgressSpinner.classList.add("active");
+    pageProgressText.textContent = "Page " + pageNum + " of " + S.numPages + ": " + text;
   }
   function hidePageProgressBanner() {
-    pageProgressBanner.classList.remove('visible');
-    pageProgressSpinner.classList.remove('active');
+    pageProgressBanner.classList.remove("visible");
+    pageProgressSpinner.classList.remove("active");
   }
-
-  skipPageBtn.addEventListener('click', () => { skipCurrentPageRequested = true; });
-  cancelProcBtn.addEventListener('click', () => {
-    processingCancelled = true;
-    skipCurrentPageRequested = true;
+  skipPageBtn.addEventListener("click", () => {
+    S.skipCurrentPageRequested = true;
+  });
+  cancelProcBtn.addEventListener("click", () => {
+    S.processingCancelled = true;
+    S.skipCurrentPageRequested = true;
     cancelProcBtn.disabled = true;
   });
 
-  // =======================================================================
-  // Search
-  // =======================================================================
-  function searchPage(pageNum, query) {
-    const d = pageData.get(pageNum);
-    if (!d) return [];
-    // A page can have both a (possibly sparse) real text layer and OCR data
-    // (see pageHasImage) — search whichever of the two are present.
-    let results = [];
-    if (d.lineGroups) results = results.concat(searchTextLayer(pageNum, query));
-    if (d.ocrLines) results = results.concat(searchOcr(pageNum, query));
-    return results;
-  }
-
-  function runFullSearch() {
-    const raw = searchInput.value.trim();
-    currentQuery = {
-      raw, norm: normalize(raw),
-      exact: exactToggle.checked, fuzzy: fuzzyToggle.checked
-    };
-    if (!currentQuery.norm) {
-      lastResults = [];
-      renderResultsList();
-      searchSummary.textContent = '';
-      drawHighlights();
-      return;
-    }
-    lastResults = [];
-    for (let p=1;p<=numPages;p++) {
-      const d = pageData.get(p);
-      if (!d || (d.status !== 'text-done' && d.status !== 'ocr-done' && d.status !== 'skipped')) continue;
-      lastResults.push(...searchPage(p, currentQuery));
-    }
-    activeResultIndex = -1;
-    renderResultsList();
-    updateSearchSummary();
-    drawHighlights();
-  }
-
-  function mergeFreshResults(pageNum, fresh) {
-    if (!fresh.length && !lastResults.some(r => r.page === pageNum)) return;
-    lastResults = lastResults.filter(r => r.page !== pageNum);
-    lastResults.push(...fresh);
-    lastResults.sort((a,b) => a.page - b.page);
-    renderResultsList();
-    updateSearchSummary();
-    if (pageNum === currentPage) drawHighlights();
-  }
-
-  function updateSearchSummary() {
-    const pagesUnprocessed = [];
-    for (let p=1;p<=numPages;p++) {
-      const d = pageData.get(p);
-      if (!['text-done','ocr-done','skipped','error'].includes(d.status)) pagesUnprocessed.push(p);
-    }
-    let msg = lastResults.length + ' match' + (lastResults.length===1?'':'es') + ' found so far';
-    if (pagesUnprocessed.length) msg += ' (' + pagesUnprocessed.length + ' page' + (pagesUnprocessed.length===1?'':'s') + ' still processing — results will keep appearing)';
-    searchSummary.textContent = msg;
-    resultsCount.textContent = lastResults.length + ' result' + (lastResults.length===1?'':'s');
-    exportCsvBtn.disabled = lastResults.length === 0;
-  }
-
-  searchBtn.addEventListener('click', runFullSearch);
-  searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') runFullSearch(); });
-  exactToggle.addEventListener('change', () => { if (currentQuery.norm) runFullSearch(); });
-  fuzzyToggle.addEventListener('change', () => { if (currentQuery.norm) runFullSearch(); });
-
-  // =======================================================================
-  // Results list rendering (with thumbnails)
-  // =======================================================================
+  // src/app/results.js
   function renderResultsList() {
-    resultsList.innerHTML = '';
-    if (!lastResults.length) {
-      const note = document.createElement('div');
-      note.className = 'empty-note';
-      note.textContent = currentQuery.norm ? 'No matches yet.' : 'Enter a tag number or string and press Search.';
+    resultsList.innerHTML = "";
+    if (!S.lastResults.length) {
+      const note = document.createElement("div");
+      note.className = "empty-note";
+      note.textContent = S.currentQuery.norm ? "No matches yet." : "Enter a tag number or string and press Search.";
       resultsList.appendChild(note);
       return;
     }
-    lastResults.forEach((res, i) => {
-      const el = document.createElement('div');
-      el.className = 'result-item' + (i === activeResultIndex ? ' active' : '');
+    S.lastResults.forEach((res, i) => {
+      const el = document.createElement("div");
+      el.className = "result-item" + (i === S.activeResultIndex ? " active" : "");
       el.dataset.index = i;
-
-      const thumbWrap = document.createElement('div');
-      thumbWrap.className = 'result-thumb';
-      const thumbCanvas = document.createElement('canvas');
-      thumbCanvas.width = 120; thumbCanvas.height = 68;
+      const thumbWrap = document.createElement("div");
+      thumbWrap.className = "result-thumb";
+      const thumbCanvas = document.createElement("canvas");
+      thumbCanvas.width = 120;
+      thumbCanvas.height = 68;
       thumbWrap.appendChild(thumbCanvas);
       el.appendChild(thumbWrap);
       buildThumbnail(res, thumbCanvas);
-
-      const meta = document.createElement('div');
-      meta.className = 'result-meta';
-
-      const topRow = document.createElement('div');
-      topRow.className = 'result-top-row';
-      topRow.innerHTML =
-        '<span class="badge badge-page">Page ' + res.page + '</span>' +
-        '<span class="badge ' + (res.source==='text' ? 'badge-text' : 'badge-ocr') + '">' + (res.source==='text'?'TEXT':'OCR') + '</span>' +
-        (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) — check the crop">GLYPH</span>' : '') +
-        (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : '') +
-        (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : '');
-      if (res.source === 'ocr') {
-        const fixBtn = document.createElement('button');
-        fixBtn.className = 'fix-btn';
-        fixBtn.textContent = res.corrected ? 'Edit fix' : 'Fix text';
-        fixBtn.title = 'Tell the tool what this actually says — it will remember and apply it everywhere';
-        fixBtn.addEventListener('click', (ev) => {
+      const meta = document.createElement("div");
+      meta.className = "result-meta";
+      const topRow = document.createElement("div");
+      topRow.className = "result-top-row";
+      topRow.innerHTML = '<span class="badge badge-page">Page ' + res.page + '</span><span class="badge ' + (res.source === "text" ? "badge-text" : "badge-ocr") + '">' + (res.source === "text" ? "TEXT" : "OCR") + "</span>" + (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) \u2014 check the crop">GLYPH</span>' : "") + (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : "") + (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : "");
+      if (res.source === "ocr") {
+        const fixBtn = document.createElement("button");
+        fixBtn.className = "fix-btn";
+        fixBtn.textContent = res.corrected ? "Edit fix" : "Fix text";
+        fixBtn.title = "Tell the tool what this actually says \u2014 it will remember and apply it everywhere";
+        fixBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           openFixEditor(el, meta, res);
         });
         topRow.appendChild(fixBtn);
       }
       meta.appendChild(topRow);
-
-      const textEl = document.createElement('div');
-      textEl.className = 'result-text';
+      const textEl = document.createElement("div");
+      textEl.className = "result-text";
       textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
       meta.appendChild(textEl);
-
-      if (res.source === 'ocr') {
+      if (res.source === "ocr") {
         if (res.corrected) {
-          const rawEl = document.createElement('div');
-          rawEl.className = 'result-raw';
-          rawEl.textContent = 'OCR read: ' + res.rawText;
+          const rawEl = document.createElement("div");
+          rawEl.className = "result-raw";
+          rawEl.textContent = "OCR read: " + res.rawText;
           meta.appendChild(rawEl);
         }
-        const conf = document.createElement('div');
-        conf.className = 'result-conf';
-        conf.textContent = res.corrected
-          ? 'Confirmed by you (OCR read it at ' + Math.round(res.confidence) + '%)'
-          : 'OCR confidence: ' + Math.round(res.confidence) + '% — low confidence doesn’t mean wrong; check the crop';
+        const conf = document.createElement("div");
+        conf.className = "result-conf";
+        conf.textContent = res.corrected ? "Confirmed by you (OCR read it at " + Math.round(res.confidence) + "%)" : "OCR confidence: " + Math.round(res.confidence) + "% \u2014 low confidence doesn\u2019t mean wrong; check the crop";
         meta.appendChild(conf);
       }
-
       el.appendChild(meta);
-      el.addEventListener('click', () => jumpToResult(i));
+      el.addEventListener("click", () => jumpToResult(i));
       resultsList.appendChild(el);
     });
   }
-
-  // Inline "what does this actually say?" editor. Saving stores a correction
-  // keyed by the raw OCR string, then re-runs the search so every other
-  // occurrence of the same misread picks the fix up immediately.
   function openFixEditor(itemEl, metaEl, res) {
-    if (metaEl.querySelector('.fix-row')) return;
-    const row = document.createElement('div');
-    row.className = 'fix-row';
-
-    const input = document.createElement('input');
-    input.type = 'text';
+    if (metaEl.querySelector(".fix-row")) return;
+    const row = document.createElement("div");
+    row.className = "fix-row";
+    const input = document.createElement("input");
+    input.type = "text";
     input.value = res.text;
-    input.setAttribute('aria-label', 'Correct text for this match');
-
-    const save = document.createElement('button');
-    save.textContent = 'Save';
-    const cancel = document.createElement('button');
-    cancel.className = 'cancel';
-    cancel.textContent = 'Cancel';
-
-    row.appendChild(input); row.appendChild(save); row.appendChild(cancel);
+    input.setAttribute("aria-label", "Correct text for this match");
+    const save = document.createElement("button");
+    save.textContent = "Save";
+    const cancel = document.createElement("button");
+    cancel.className = "cancel";
+    cancel.textContent = "Cancel";
+    row.appendChild(input);
+    row.appendChild(save);
+    row.appendChild(cancel);
     metaEl.appendChild(row);
     input.focus();
     input.select();
-
     const stop = (ev) => ev.stopPropagation();
-    row.addEventListener('click', stop);
-
+    row.addEventListener("click", stop);
     function commit() {
       setCorrection(res.rawText, input.value.trim());
       runFullSearch();
     }
-    save.addEventListener('click', (ev) => { ev.stopPropagation(); commit(); });
-    cancel.addEventListener('click', (ev) => { ev.stopPropagation(); row.remove(); });
-    input.addEventListener('keydown', (ev) => {
+    save.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      if (ev.key === 'Enter') commit();
-      if (ev.key === 'Escape') row.remove();
+      commit();
+    });
+    cancel.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      row.remove();
+    });
+    input.addEventListener("keydown", (ev) => {
+      ev.stopPropagation();
+      if (ev.key === "Enter") commit();
+      if (ev.key === "Escape") row.remove();
     });
   }
-
-  // The matcher already knows where in the NORMALIZED string it matched — which
-  // it has to, since a confusion match has no findable substring to search for.
-  // Walk the raw text counting only the characters normalize() keeps, to map
-  // that normalized span back onto the original text for display.
   function highlightMatch(text, pos, len) {
-    if (typeof pos !== 'number' || !len) return escapeHtml(text);
+    if (typeof pos !== "number" || !len) return escapeHtml(text);
     let rawStart = -1, rawEnd = -1, keptCount = 0;
-    for (let i=0;i<text.length;i++) {
-      // Must mirror normalize() exactly: it keeps A-Z0-9 and drops all else.
+    for (let i = 0; i < text.length; i++) {
       const isKept = /[A-Za-z0-9]/.test(text[i]);
       if (isKept) {
         if (keptCount === pos) rawStart = i;
-        if (keptCount === pos + len - 1) { rawEnd = i+1; break; }
+        if (keptCount === pos + len - 1) {
+          rawEnd = i + 1;
+          break;
+        }
         keptCount++;
       }
     }
     if (rawStart === -1) return escapeHtml(text);
     if (rawEnd === -1) rawEnd = text.length;
-    return escapeHtml(text.slice(0,rawStart)) + '<mark>' + escapeHtml(text.slice(rawStart,rawEnd)) + '</mark>' + escapeHtml(text.slice(rawEnd));
+    return escapeHtml(text.slice(0, rawStart)) + "<mark>" + escapeHtml(text.slice(rawStart, rawEnd)) + "</mark>" + escapeHtml(text.slice(rawEnd));
   }
-
   async function buildThumbnail(res, canvasEl) {
-    const ctx = canvasEl.getContext('2d');
-    const data = pageData.get(res.page);
+    const ctx = canvasEl.getContext("2d");
+    const data = S.pageData.get(res.page);
     let src = data.thumbCanvas;
     let srcScale = data.thumbScale;
-
     if (!src) {
-      // no OCR canvas cached (text-layer page) — render a modest-res canvas once and cache it
       const page = await getPageProxy(res.page);
       const vp = page.getViewport({ scale: 1.6 });
-      const c = document.createElement('canvas');
-      c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
-      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
-      data.thumbCanvas = c; data.thumbScale = 1.6;
-      src = c; srcScale = 1.6;
+      const c = document.createElement("canvas");
+      c.width = Math.ceil(vp.width);
+      c.height = Math.ceil(vp.height);
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      data.thumbCanvas = c;
+      data.thumbScale = 1.6;
+      src = c;
+      srcScale = 1.6;
     }
-
     let box;
-    if (res.source === 'text') {
+    if (res.source === "text") {
       const page = await getPageProxy(res.page);
       const vp = page.getViewport({ scale: srcScale });
       const pts = [];
@@ -1601,239 +1171,560 @@
       }
       box = boundsOfPoints(pts);
     } else {
-      const ratio = srcScale / data.thumbScale; // both same scale normally
-      box = { minX: res.bbox.x0*ratio, minY: res.bbox.y0*ratio, maxX: res.bbox.x1*ratio, maxY: res.bbox.y1*ratio };
+      const ratio = srcScale / data.thumbScale;
+      box = { minX: res.bbox.x0 * ratio, minY: res.bbox.y0 * ratio, maxX: res.bbox.x1 * ratio, maxY: res.bbox.y1 * ratio };
     }
-
     const w = box.maxX - box.minX, h = box.maxY - box.minY;
-    const padX = Math.max(w*0.6, 24), padY = Math.max(h*0.8, 16);
+    const padX = Math.max(w * 0.6, 24), padY = Math.max(h * 0.8, 16);
     let sx = box.minX - padX, sy = box.minY - padY;
-    let sw = w + padX*2, sh = h + padY*2;
-    sx = clamp(sx, 0, src.width); sy = clamp(sy, 0, src.height);
-    sw = clamp(sw, 4, src.width - sx); sh = clamp(sh, 4, src.height - sy);
-
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0,0,canvasEl.width, canvasEl.height);
-    // preserve aspect ratio, letterbox into the thumbnail
-    const scaleFit = Math.min(canvasEl.width/sw, canvasEl.height/sh);
-    const dw = sw*scaleFit, dh = sh*scaleFit;
-    const dx = (canvasEl.width-dw)/2, dy = (canvasEl.height-dh)/2;
+    let sw = w + padX * 2, sh = h + padY * 2;
+    sx = clamp(sx, 0, src.width);
+    sy = clamp(sy, 0, src.height);
+    sw = clamp(sw, 4, src.width - sx);
+    sh = clamp(sh, 4, src.height - sy);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+    const scaleFit = Math.min(canvasEl.width / sw, canvasEl.height / sh);
+    const dw = sw * scaleFit, dh = sh * scaleFit;
+    const dx = (canvasEl.width - dw) / 2, dy = (canvasEl.height - dh) / 2;
     ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh);
   }
-
-  exportCsvBtn.addEventListener('click', exportCsv);
+  exportCsvBtn.addEventListener("click", exportCsv);
   function exportCsv() {
-    const rows = [['Page','Source','Confidence','Matched Text','Corrected','Raw OCR Text']];
-    for (const r of lastResults) {
+    const rows = [["Page", "Source", "Confidence", "Matched Text", "Corrected", "Raw OCR Text"]];
+    for (const r of S.lastResults) {
       rows.push([
-        r.page, r.source,
-        r.source==='ocr' ? Math.round(r.confidence)+'%' : '',
+        r.page,
+        r.source,
+        r.source === "ocr" ? Math.round(r.confidence) + "%" : "",
         r.text,
-        r.corrected ? 'yes' : '',
-        r.corrected ? r.rawText : ''
+        r.corrected ? "yes" : "",
+        r.corrected ? r.rawText : ""
       ]);
     }
-    const csv = rows.map(row => row.map(cell => {
-      const s = String(cell ?? '');
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
-    }).join(',')).join('\r\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
+    const csv = rows.map((row) => row.map((cell) => {
+      const s = String(cell ?? "");
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'pid_tag_matches.csv';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "pid_tag_matches.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
-  // =======================================================================
-  // Viewer: render page, zoom/pan, highlight overlay
-  // =======================================================================
+  // src/app/viewer.js
   async function renderPage(pageNum) {
-    // Only one render may target the shared page canvas at a time. Zooming,
-    // page-flipping or dropping a new PDF mid-render would otherwise hit
-    // pdf.js's "same canvas during multiple render() operations" error, so
-    // cancel any in-flight render and wait for it to unwind first.
-    if (currentRenderTask) {
-      try { currentRenderTask.cancel(); } catch (err) { /* already finished */ }
-      try { await currentRenderTask.promise; } catch (err) { /* expected: cancelled */ }
-      currentRenderTask = null;
+    if (S.currentRenderTask) {
+      try {
+        S.currentRenderTask.cancel();
+      } catch (err) {
+      }
+      try {
+        await S.currentRenderTask.promise;
+      } catch (err) {
+      }
+      S.currentRenderTask = null;
     }
-    if (!pdfDoc) return;
-
-    currentPage = clamp(pageNum, 1, numPages);
-    pageNumInput.value = currentPage;
-    const page = await getPageProxy(currentPage);
-    const viewport = page.getViewport({ scale });
+    if (!S.pdfDoc) return;
+    S.currentPage = clamp(pageNum, 1, S.numPages);
+    pageNumInput.value = S.currentPage;
+    const page = await getPageProxy(S.currentPage);
+    const viewport = page.getViewport({ scale: S.scale });
     pageCanvas.width = Math.ceil(viewport.width);
     pageCanvas.height = Math.ceil(viewport.height);
     overlayCanvas.width = pageCanvas.width;
     overlayCanvas.height = pageCanvas.height;
-    canvasStage.style.width = pageCanvas.width + 'px';
-    canvasStage.style.height = pageCanvas.height + 'px';
-
+    canvasStage.style.width = pageCanvas.width + "px";
+    canvasStage.style.height = pageCanvas.height + "px";
     const task = page.render({ canvasContext: pageCtx, viewport });
-    currentRenderTask = task;
+    S.currentRenderTask = task;
     try {
       await task.promise;
     } catch (err) {
-      if (err && err.name === 'RenderingCancelledException') return;
+      if (err && err.name === "RenderingCancelledException") return;
       throw err;
     } finally {
-      if (currentRenderTask === task) currentRenderTask = null;
+      if (S.currentRenderTask === task) S.currentRenderTask = null;
     }
     updatePageBadge();
     updateProcSummary();
     await drawHighlights();
-
-    const d = pageData.get(currentPage);
-    skipPageBtn.disabled = !(d && d.status === 'ocr-running');
+    const d = S.pageData.get(S.currentPage);
+    skipPageBtn.disabled = !(d && d.status === "ocr-running");
   }
-
   function updatePageBadge() {
-    const d = pageData.get(currentPage);
-    currentPageBadge.className = 'page-badge';
-    if (!d) { currentPageBadge.textContent = '—'; return; }
+    const d = S.pageData.get(S.currentPage);
+    currentPageBadge.className = "page-badge";
+    if (!d) {
+      currentPageBadge.textContent = "\u2014";
+      return;
+    }
     const map = {
-      'pending': ['pending','Queued'],
-      'text-extracting': ['running','Extracting text…'],
-      'text-done': ['text','Text layer'],
-      'ocr-running': ['running','OCR running…'],
-      'ocr-done': ['ocr','OCR'],
-      'skipped': ['pending','OCR skipped'],
-      'error': ['error','Error']
+      "pending": ["pending", "Queued"],
+      "text-extracting": ["running", "Extracting text\u2026"],
+      "text-done": ["text", "Text layer"],
+      "ocr-running": ["running", "OCR running\u2026"],
+      "ocr-done": ["ocr", "OCR"],
+      "skipped": ["pending", "OCR skipped"],
+      "error": ["error", "Error"]
     };
-    const [cls, label] = map[d.status] || ['pending', d.status];
+    const [cls, label] = map[d.status] || ["pending", d.status];
     currentPageBadge.classList.add(cls);
     currentPageBadge.textContent = label;
   }
-
   async function drawHighlights(activeOnly) {
-    overlayCtx.clearRect(0,0,overlayCanvas.width, overlayCanvas.height);
-    if (!lastResults.length) return;
-    const page = await getPageProxy(currentPage);
-    const viewport = page.getViewport({ scale });
-    const data = pageData.get(currentPage);
-
-    lastResults.forEach((res, i) => {
-      if (res.page !== currentPage) return;
-      const isActive = i === activeResultIndex;
+    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    if (!S.lastResults.length) return;
+    const page = await getPageProxy(S.currentPage);
+    const viewport = page.getViewport({ scale: S.scale });
+    const data = S.pageData.get(S.currentPage);
+    S.lastResults.forEach((res, i) => {
+      if (res.page !== S.currentPage) return;
+      const isActive = i === S.activeResultIndex;
       overlayCtx.lineWidth = isActive ? 3 : 1.5;
-      overlayCtx.strokeStyle = isActive ? '#ff5c5c' : 'rgba(79,157,255,0.85)';
-      overlayCtx.fillStyle = isActive ? 'rgba(255,92,92,0.18)' : 'rgba(79,157,255,0.12)';
-
-      if (res.source === 'text') {
+      overlayCtx.strokeStyle = isActive ? "#ff5c5c" : "rgba(79,157,255,0.85)";
+      overlayCtx.fillStyle = isActive ? "rgba(255,92,92,0.18)" : "rgba(79,157,255,0.12)";
+      if (res.source === "text") {
         for (const idx of res.itemIndices) {
           const it = data.textItems[idx];
           strokePoly(itemQuadCanvas(it, viewport));
         }
       } else {
-        const ratio = scale / data.thumbScale;
-        const x0 = res.bbox.x0*ratio, y0 = res.bbox.y0*ratio, x1 = res.bbox.x1*ratio, y1 = res.bbox.y1*ratio;
-        strokePoly([[x0,y0],[x1,y0],[x1,y1],[x0,y1]]);
+        const ratio = S.scale / data.thumbScale;
+        const x0 = res.bbox.x0 * ratio, y0 = res.bbox.y0 * ratio, x1 = res.bbox.x1 * ratio, y1 = res.bbox.y1 * ratio;
+        strokePoly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
       }
     });
   }
-
   function strokePoly(pts) {
     overlayCtx.beginPath();
     overlayCtx.moveTo(pts[0][0], pts[0][1]);
-    for (let i=1;i<pts.length;i++) overlayCtx.lineTo(pts[i][0], pts[i][1]);
+    for (let i = 1; i < pts.length; i++) overlayCtx.lineTo(pts[i][0], pts[i][1]);
     overlayCtx.closePath();
     overlayCtx.fill();
     overlayCtx.stroke();
   }
-
   async function jumpToResult(i) {
-    activeResultIndex = i;
+    S.activeResultIndex = i;
     renderResultsList();
-    const res = lastResults[i];
-    if (scale < 2.5) scale = 2.5;
-    if (res.page !== currentPage) {
+    const res = S.lastResults[i];
+    if (S.scale < 2.5) S.scale = 2.5;
+    if (res.page !== S.currentPage) {
       await renderPage(res.page);
     } else {
-      await renderPage(currentPage); // re-render at (possibly) new scale
+      await renderPage(S.currentPage);
     }
     centerOnResult(res);
     await drawHighlights();
   }
-
   async function centerOnResult(res) {
     const page = await getPageProxy(res.page);
-    const viewport = page.getViewport({ scale });
-    const data = pageData.get(res.page);
+    const viewport = page.getViewport({ scale: S.scale });
+    const data = S.pageData.get(res.page);
     let pts;
-    if (res.source === 'text') {
+    if (res.source === "text") {
       pts = [];
       for (const idx of res.itemIndices) {
         const it = data.textItems[idx];
         pts.push(...itemQuadCanvas(it, viewport));
       }
     } else {
-      const ratio = scale / data.thumbScale;
-      pts = [[res.bbox.x0*ratio,res.bbox.y0*ratio],[res.bbox.x1*ratio,res.bbox.y1*ratio]];
+      const ratio = S.scale / data.thumbScale;
+      pts = [[res.bbox.x0 * ratio, res.bbox.y0 * ratio], [res.bbox.x1 * ratio, res.bbox.y1 * ratio]];
     }
     const b = boundsOfPoints(pts);
-    const cx = (b.minX+b.maxX)/2, cy = (b.minY+b.maxY)/2;
-    canvasScroll.scrollLeft = cx - canvasScroll.clientWidth/2;
-    canvasScroll.scrollTop = cy - canvasScroll.clientHeight/2;
+    const cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+    canvasScroll.scrollLeft = cx - canvasScroll.clientWidth / 2;
+    canvasScroll.scrollTop = cy - canvasScroll.clientHeight / 2;
   }
-
-  // ---- page navigation ----
-  prevPageBtn.addEventListener('click', () => renderPage(currentPage-1));
-  nextPageBtn.addEventListener('click', () => renderPage(currentPage+1));
-  pageNumInput.addEventListener('change', () => {
+  prevPageBtn.addEventListener("click", () => renderPage(S.currentPage - 1));
+  nextPageBtn.addEventListener("click", () => renderPage(S.currentPage + 1));
+  pageNumInput.addEventListener("change", () => {
     const n = parseInt(pageNumInput.value, 10);
     if (!isNaN(n)) renderPage(n);
   });
-
-  // ---- zoom ----
   function setZoom(newScale) {
-    scale = clamp(newScale, 0.25, 8);
-    zoomLabel.textContent = Math.round(scale/1.5*100) + '%'; // 1.5 == "100%" baseline
+    S.scale = clamp(newScale, 0.25, 8);
+    zoomLabel.textContent = Math.round(S.scale / 1.5 * 100) + "%";
   }
-  zoomInBtn.addEventListener('click', async () => { setZoom(scale*1.25); await renderPage(currentPage); });
-  zoomOutBtn.addEventListener('click', async () => { setZoom(scale/1.25); await renderPage(currentPage); });
-  zoomResetBtn.addEventListener('click', async () => { setZoom(1.5); await renderPage(currentPage); });
-  fitWidthBtn.addEventListener('click', async () => {
-    const page = await getPageProxy(currentPage);
+  zoomInBtn.addEventListener("click", async () => {
+    setZoom(S.scale * 1.25);
+    await renderPage(S.currentPage);
+  });
+  zoomOutBtn.addEventListener("click", async () => {
+    setZoom(S.scale / 1.25);
+    await renderPage(S.currentPage);
+  });
+  zoomResetBtn.addEventListener("click", async () => {
+    setZoom(1.5);
+    await renderPage(S.currentPage);
+  });
+  fitWidthBtn.addEventListener("click", async () => {
+    const page = await getPageProxy(S.currentPage);
     const vp1 = page.getViewport({ scale: 1 });
     const target = (canvasScroll.clientWidth - 48) / vp1.width;
     setZoom(target);
-    await renderPage(currentPage);
+    await renderPage(S.currentPage);
   });
   setZoom(1.5);
-
-  canvasScroll.addEventListener('wheel', async (e) => {
-    if (!pdfDoc) return;
+  canvasScroll.addEventListener("wheel", async (e) => {
+    if (!S.pdfDoc) return;
     e.preventDefault();
     const rect = canvasScroll.getBoundingClientRect();
     const offsetX = e.clientX - rect.left + canvasScroll.scrollLeft;
     const offsetY = e.clientY - rect.top + canvasScroll.scrollTop;
-    const oldScale = scale;
-    setZoom(scale * (e.deltaY < 0 ? 1.1 : 0.9));
-    const ratio = scale / oldScale;
-    await renderPage(currentPage);
-    canvasScroll.scrollLeft = offsetX*ratio - (e.clientX-rect.left);
-    canvasScroll.scrollTop = offsetY*ratio - (e.clientY-rect.top);
+    const oldScale = S.scale;
+    setZoom(S.scale * (e.deltaY < 0 ? 1.1 : 0.9));
+    const ratio = S.scale / oldScale;
+    await renderPage(S.currentPage);
+    canvasScroll.scrollLeft = offsetX * ratio - (e.clientX - rect.left);
+    canvasScroll.scrollTop = offsetY * ratio - (e.clientY - rect.top);
   }, { passive: false });
-
-  // ---- drag to pan ----
-  let dragging = false, dragStartX=0, dragStartY=0, dragScrollX=0, dragScrollY=0;
-  canvasScroll.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.result-item')) return;
+  var dragging = false;
+  var dragStartX = 0;
+  var dragStartY = 0;
+  var dragScrollX = 0;
+  var dragScrollY = 0;
+  canvasScroll.addEventListener("mousedown", (e) => {
+    if (e.target.closest(".result-item")) return;
     dragging = true;
-    dragStartX = e.clientX; dragStartY = e.clientY;
-    dragScrollX = canvasScroll.scrollLeft; dragScrollY = canvasScroll.scrollTop;
-    canvasScroll.style.cursor = 'grabbing';
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragScrollX = canvasScroll.scrollLeft;
+    dragScrollY = canvasScroll.scrollTop;
+    canvasScroll.style.cursor = "grabbing";
   });
-  window.addEventListener('mousemove', (e) => {
+  window.addEventListener("mousemove", (e) => {
     if (!dragging) return;
     canvasScroll.scrollLeft = dragScrollX - (e.clientX - dragStartX);
     canvasScroll.scrollTop = dragScrollY - (e.clientY - dragStartY);
   });
-  window.addEventListener('mouseup', () => { dragging = false; canvasScroll.style.cursor = ''; });
+  window.addEventListener("mouseup", () => {
+    dragging = false;
+    canvasScroll.style.cursor = "";
+  });
 
+  // src/app/pdf.js
+  fileInput.addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    await loadPdf(file);
+  });
+  var dragDepth = 0;
+  function eventHasFiles(e) {
+    const dt = e.dataTransfer;
+    if (!dt) return false;
+    if (dt.types) return Array.prototype.indexOf.call(dt.types, "Files") !== -1;
+    return false;
+  }
+  window.addEventListener("dragenter", (e) => {
+    if (!eventHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    dropOverlay.classList.add("active");
+  });
+  window.addEventListener("dragover", (e) => {
+    if (!eventHasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", (e) => {
+    if (!eventHasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropOverlay.classList.remove("active");
+  });
+  window.addEventListener("drop", async (e) => {
+    if (!eventHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    dropOverlay.classList.remove("active");
+    const files = Array.from(e.dataTransfer && e.dataTransfer.files || []);
+    const pdf = files.find((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+    if (!pdf) {
+      fileInfo.textContent = "That file isn\u2019t a PDF \u2014 drop a .pdf drawing instead.";
+      return;
+    }
+    await loadPdf(pdf);
+  });
+  async function loadPdf(file) {
+    resetDocumentState();
+    fileInfo.textContent = "Loading " + file.name + " \u2026";
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      S.pdfDoc = await loadingTask.promise;
+      S.numPages = S.pdfDoc.numPages;
+      fileInfo.textContent = file.name + " \u2014 " + S.numPages + " page" + (S.numPages === 1 ? "" : "s");
+      for (let p = 1; p <= S.numPages; p++) {
+        S.pageData.set(p, {
+          status: "pending",
+          source: null,
+          textItems: null,
+          lineGroups: null,
+          ocrWords: null,
+          ocrLines: null,
+          thumbCanvas: null,
+          thumbScale: null,
+          rawLen: 0
+        });
+      }
+      emptyViewer.style.display = "none";
+      canvasStage.style.display = "";
+      toolbar.style.display = "";
+      searchInput.disabled = false;
+      searchBtn.disabled = false;
+      cancelProcBtn.disabled = false;
+      pageCountLabel.textContent = "/ " + S.numPages;
+      pageNumInput.value = "1";
+      S.currentPage = 1;
+      await renderPage(1);
+      updateProcSummary();
+      startBackgroundProcessing();
+    } catch (err) {
+      console.error(err);
+      fileInfo.textContent = "Failed to load PDF: " + err.message;
+    }
+  }
+  function resetDocumentState() {
+    S.docEpoch++;
+    S.pdfDoc = null;
+    S.numPages = 0;
+    S.currentPage = 1;
+    S.scale = 1.5;
+    S.pageProxyCache.clear();
+    S.pageData.clear();
+    S.lastResults = [];
+    S.activeResultIndex = -1;
+    S.processingCancelled = true;
+    S.skipCurrentPageRequested = false;
+    S.isBackgroundRunning = false;
+    if (S.currentRenderTask) {
+      try {
+        S.currentRenderTask.cancel();
+      } catch (err) {
+      }
+      S.currentRenderTask = null;
+    }
+    if (S.tickerHandle) {
+      clearInterval(S.tickerHandle);
+      S.tickerHandle = null;
+    }
+    if (S.ocrWorker) {
+      S.ocrWorker.terminate().catch(() => {
+      });
+      S.ocrWorker = null;
+    }
+    resultsList.innerHTML = '<div class="empty-note">Load a PDF and run a search to see matches here.</div>';
+    resultsCount.textContent = "Results";
+    exportCsvBtn.disabled = true;
+    searchSummary.textContent = "";
+    searchInput.disabled = true;
+    searchBtn.disabled = true;
+    skipPageBtn.disabled = true;
+    cancelProcBtn.disabled = true;
+    toolbar.style.display = "none";
+    canvasStage.style.display = "none";
+    emptyViewer.style.display = "";
+    hidePageProgressBanner();
+    procBarInner.classList.remove("processing");
+    procSpinner.classList.remove("active");
+  }
+  function getPageProxy(pageNum) {
+    if (!S.pageProxyCache.has(pageNum)) {
+      S.pageProxyCache.set(pageNum, S.pdfDoc.getPage(pageNum));
+    }
+    return S.pageProxyCache.get(pageNum);
+  }
+
+  // src/app/textlayer.js
+  async function pageHasImage(page) {
+    try {
+      const opList = await page.getOperatorList();
+      const OPS = pdfjsLib.OPS;
+      for (const fn of opList.fnArray) {
+        if (fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject || fn === OPS.paintImageXObjectRepeat) {
+          return true;
+        }
+      }
+    } catch (err) {
+      console.warn("operator list scan failed on page", err);
+    }
+    return false;
+  }
+  async function extractTextLayer(pageNum) {
+    const page = await getPageProxy(pageNum);
+    const textContent = await page.getTextContent();
+    const items = textContent.items.filter((it) => it.str && it.str.trim().length > 0);
+    let rawLen = 0;
+    for (const it of items) rawLen += it.str.length;
+    const data = S.pageData.get(pageNum);
+    data.textItems = items;
+    data.rawLen = rawLen;
+    if (items.length) {
+      data.lineGroups = groupItemsIntoLines(items);
+    }
+    const hasImage = await pageHasImage(page);
+    const confidentTextLayer = rawLen > TEXT_LEN_THRESHOLD && !hasImage;
+    if (confidentTextLayer) {
+      data.status = "text-done";
+    }
+    return confidentTextLayer;
+  }
+  function groupItemsIntoLines(items) {
+    const enriched = items.map((it, idx) => {
+      const t = it.transform;
+      const angle = Math.atan2(t[1], t[0]);
+      const bx = t[4], by = t[5];
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      const parallel = bx * cos + by * sin;
+      const perp = -bx * sin + by * cos;
+      const fontSize = Math.hypot(t[0], t[1]) || 1;
+      return { idx, item: it, angle, parallel, perp, fontSize };
+    });
+    const buckets = /* @__PURE__ */ new Map();
+    const angleStep = Math.PI / 180;
+    for (const e of enriched) {
+      const angleKey = Math.round(e.angle / angleStep);
+      const perpKey = Math.round(e.perp / Math.max(2, e.fontSize * 0.5));
+      const key = angleKey + "_" + perpKey;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(e);
+    }
+    const lines = [];
+    for (const bucket of buckets.values()) {
+      bucket.sort((a, b) => a.parallel - b.parallel);
+      lines.push(bucket);
+    }
+    return lines;
+  }
+  function searchTextLayer(pageNum, query) {
+    const data = S.pageData.get(pageNum);
+    if (!data || !data.lineGroups) return [];
+    const results = [];
+    for (const line of data.lineGroups) {
+      const covered = /* @__PURE__ */ new Set();
+      for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
+        for (let start = 0; start + winSize <= line.length; start++) {
+          const windowEntries = line.slice(start, start + winSize);
+          const idxs = windowEntries.map((e) => e.idx);
+          if (idxs.some((i) => covered.has(i))) continue;
+          if (winSize > 1) {
+            let tooFar = false;
+            for (let k = 0; k < windowEntries.length - 1; k++) {
+              const a = windowEntries[k], b = windowEntries[k + 1];
+              const gap = b.parallel - (a.parallel + a.item.width);
+              if (gap > a.fontSize * JOIN_GAP_FACTOR) {
+                tooFar = true;
+                break;
+              }
+            }
+            if (tooFar) continue;
+          }
+          const text = windowEntries.map((e) => e.item.str).join("");
+          const norm = normalize(text);
+          if (!norm) continue;
+          const m = matchWindow(norm, query);
+          if (!m) continue;
+          idxs.forEach((i) => covered.add(i));
+          results.push({
+            page: pageNum,
+            source: "text",
+            text,
+            itemIndices: idxs,
+            confidence: null,
+            fuzzy: m.fuzzy,
+            confused: m.confused,
+            matchPos: m.pos,
+            matchLen: m.len
+          });
+        }
+      }
+    }
+    return results;
+  }
+
+  // src/app/search.js
+  function searchPage(pageNum, query) {
+    const d = S.pageData.get(pageNum);
+    if (!d) return [];
+    let results = [];
+    if (d.lineGroups) results = results.concat(searchTextLayer(pageNum, query));
+    if (d.ocrLines) results = results.concat(searchOcr(pageNum, query));
+    return results;
+  }
+  function runFullSearch() {
+    const raw = searchInput.value.trim();
+    S.currentQuery = {
+      raw,
+      norm: normalize(raw),
+      exact: exactToggle.checked,
+      fuzzy: fuzzyToggle.checked
+    };
+    if (!S.currentQuery.norm) {
+      S.lastResults = [];
+      renderResultsList();
+      searchSummary.textContent = "";
+      drawHighlights();
+      return;
+    }
+    S.lastResults = [];
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
+      if (!d || d.status !== "text-done" && d.status !== "ocr-done" && d.status !== "skipped") continue;
+      S.lastResults.push(...searchPage(p, S.currentQuery));
+    }
+    S.activeResultIndex = -1;
+    renderResultsList();
+    updateSearchSummary();
+    drawHighlights();
+  }
+  function mergeFreshResults(pageNum, fresh) {
+    if (!fresh.length && !S.lastResults.some((r) => r.page === pageNum)) return;
+    S.lastResults = S.lastResults.filter((r) => r.page !== pageNum);
+    S.lastResults.push(...fresh);
+    S.lastResults.sort((a, b) => a.page - b.page);
+    renderResultsList();
+    updateSearchSummary();
+    if (pageNum === S.currentPage) drawHighlights();
+  }
+  function updateSearchSummary() {
+    const pagesUnprocessed = [];
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
+      if (!["text-done", "ocr-done", "skipped", "error"].includes(d.status)) pagesUnprocessed.push(p);
+    }
+    let msg = S.lastResults.length + " match" + (S.lastResults.length === 1 ? "" : "es") + " found so far";
+    if (pagesUnprocessed.length) msg += " (" + pagesUnprocessed.length + " page" + (pagesUnprocessed.length === 1 ? "" : "s") + " still processing \u2014 results will keep appearing)";
+    searchSummary.textContent = msg;
+    resultsCount.textContent = S.lastResults.length + " result" + (S.lastResults.length === 1 ? "" : "s");
+    exportCsvBtn.disabled = S.lastResults.length === 0;
+  }
+  searchBtn.addEventListener("click", runFullSearch);
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runFullSearch();
+  });
+  exactToggle.addEventListener("change", () => {
+    if (S.currentQuery.norm) runFullSearch();
+  });
+  fuzzyToggle.addEventListener("change", () => {
+    if (S.currentQuery.norm) runFullSearch();
+  });
+
+  // src/app/main.js
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  clearCorrectionsBtn.addEventListener("click", () => {
+    clearCorrections();
+    if (S.currentQuery.norm) runFullSearch();
+  });
+  loadCorrections();
+  updateCorrectionsBar();
 })();
+
 </script>
 </body>
 </html>
