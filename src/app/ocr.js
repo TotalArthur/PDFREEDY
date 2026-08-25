@@ -1,9 +1,8 @@
 import { S } from './state.js';
-import { normalize } from '../lib/text.js';
-import { matchWindow } from '../lib/matching.js';
+import { findWindowMatches } from '../lib/windows.js';
 import { preprocessForOcr, rotateCanvas } from '../lib/preprocess.js';
 import { mapBoxBack, readingAxis, boundsOfPoints } from '../lib/geometry.js';
-import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW } from './config.js';
+import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, TESSERACT_INIT, tesseractParams } from './config.js';
 import { getPageProxy } from './pdf.js';
 import { getCorrection } from './corrections.js';
 import {
@@ -17,27 +16,10 @@ import {
 // =======================================================================
 async function ensureOcrWorker() {
   if (!S.ocrWorker) {
-    S.ocrWorker = await Tesseract.createWorker('eng');
-    await S.ocrWorker.setParameters({
-      // P&ID sheets are mostly line art with sparse, scattered labels, not
-      // paragraphs — SPARSE_TEXT skips Tesseract's column/block layout
-      // analysis (the slow, and on a drawing often wrong, part of the
-      // default "fully automatic" mode) and just hunts for text directly.
-      tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
-      // Narrowing the character set cuts down on stray-symbol noise (stuff
-      // like "=", "©", "•" picked up from line art) and measurably helps
-      // both accuracy and decoding speed for tag-style text.
-      // Uppercase only. Every comparison in this tool runs through normalize(),
-      // which upper-cases anyway, so a lowercase alphabet can never help a match
-      // — it only gives the decoder extra ways to be wrong (picking 'l' over '1',
-      // 'o' over '0'). Removing it strictly shrinks the error space.
-      tessedit_char_whitelist:
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,:()#&+ ",
-      // Tag callouts are standalone strings, not prose — Tesseract's built-in
-      // English dictionary can only drag a correct read toward a real word.
-      load_system_dawg: '0',
-      load_freq_dawg: '0',
-    });
+    // The 4th argument is the init config — see TESSERACT_INIT for why the
+    // dictionary flags have to go there and not through setParameters.
+    S.ocrWorker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {}, TESSERACT_INIT);
+    await S.ocrWorker.setParameters(tesseractParams(Tesseract.PSM));
   }
   return S.ocrWorker;
 }
@@ -116,48 +98,25 @@ function searchOcr(pageNum, query) {
   const results = [];
 
   for (const line of data.ocrLines) {
-    const words = line.words;
-    const covered = new Set();
-    for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
-      for (let start = 0; start + winSize <= words.length; start++) {
-        const win = words.slice(start, start + winSize);
-        const wIdxs = win.map((_,k) => start+k);
-        if (wIdxs.some(i => covered.has(i))) continue;
+    // rs/re/rh are already on each word from readingAxis(), so vertical and
+    // upside-down passes join and order exactly like horizontal ones.
+    const items = line.words.map((w, i) => ({ key: i, text: w.text, rs: w.rs, re: w.re, rh: w.rh, word: w }));
 
-        if (winSize > 1) {
-          let tooFar = false;
-          for (let k=0;k<win.length-1;k++) {
-            const a = win[k], b = win[k+1];
-            // Measured along the reading axis, so this is the true inter-word
-            // gap for vertical and upside-down text as well as horizontal.
-            const gap = b.rs - a.re;
-            if (gap > a.rh * JOIN_GAP_FACTOR) { tooFar = true; break; }
-          }
-          if (tooFar) continue;
-        }
-
-        const rawText = win.map(w => w.text).join(win.length>1 ? ' ' : '');
-        // A saved correction replaces what OCR *thought* it read, so this
-        // window is matched (and displayed) as the tag it really is.
-        const fixed = getCorrection(rawText);
-        const text = fixed || rawText;
-        const norm = normalize(text);
-        if (!norm) continue;
-
-        const m = matchWindow(norm, query);
-        if (!m) continue;
-
-        wIdxs.forEach(i => covered.add(i));
-        const b = boundsOfPoints(win.flatMap(w => [[w.bbox.x0,w.bbox.y0],[w.bbox.x1,w.bbox.y1]]));
-        const avgConf = win.reduce((s,w)=>s+w.confidence,0) / win.length;
-        results.push({
-          page: pageNum, source: 'ocr', text, rawText,
-          corrected: !!fixed,
-          bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
-          confidence: avgConf,
-          fuzzy: m.fuzzy, confused: m.confused, matchPos: m.pos, matchLen: m.len
-        });
-      }
+    for (const hit of findWindowMatches(items, query, {
+      maxWindow: MAX_WINDOW, gapFactor: JOIN_GAP_FACTOR, join: ' ',
+      transform: getCorrection,
+    })) {
+      const win = hit.items.map(it => it.word);
+      const b = boundsOfPoints(win.flatMap(w => [[w.bbox.x0,w.bbox.y0],[w.bbox.x1,w.bbox.y1]]));
+      const avgConf = win.reduce((s,w)=>s+w.confidence,0) / win.length;
+      results.push({
+        page: pageNum, source: 'ocr', text: hit.text, rawText: hit.rawText,
+        corrected: hit.corrected,
+        bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
+        confidence: avgConf,
+        fuzzy: hit.match.fuzzy, confused: hit.match.confused,
+        matchPos: hit.match.pos, matchLen: hit.match.len
+      });
     }
   }
   return results;

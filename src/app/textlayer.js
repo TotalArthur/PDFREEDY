@@ -1,6 +1,5 @@
 import { S } from './state.js';
-import { normalize } from '../lib/text.js';
-import { matchWindow } from '../lib/matching.js';
+import { findWindowMatches } from '../lib/windows.js';
 import { TEXT_LEN_THRESHOLD, JOIN_GAP_FACTOR, MAX_WINDOW } from './config.js';
 import { getPageProxy } from './pdf.js';
 
@@ -87,48 +86,32 @@ function groupItemsIntoLines(items) {
   return lines;
 }
 
-// Build match "windows" (size 1..3 consecutive items on a line) and test against query.
 function searchTextLayer(pageNum, query) {
   const data = S.pageData.get(pageNum);
   if (!data || !data.lineGroups) return [];
   const results = [];
 
   for (const line of data.lineGroups) {
-    const covered = new Set();
-    for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
-      for (let start = 0; start + winSize <= line.length; start++) {
-        const windowEntries = line.slice(start, start + winSize);
-        const idxs = windowEntries.map(e => e.idx);
-        if (idxs.some(i => covered.has(i))) continue;
+    // Project onto the shape findWindowMatches works in. A horizontal run's
+    // reading axis is just its baseline coordinate, and its character height is
+    // the font size.
+    const items = line.map(e => ({
+      key: e.idx, text: e.item.str,
+      rs: e.parallel, re: e.parallel + e.item.width, rh: e.fontSize,
+    }));
 
-        if (winSize > 1) {
-          // require entries to be reasonably close together to justify joining
-          let tooFar = false;
-          for (let k=0;k<windowEntries.length-1;k++) {
-            const a = windowEntries[k], b = windowEntries[k+1];
-            const gap = b.parallel - (a.parallel + a.item.width);
-            if (gap > a.fontSize * JOIN_GAP_FACTOR) { tooFar = true; break; }
-          }
-          if (tooFar) continue;
-        }
-
-        const text = windowEntries.map(e => e.item.str).join('');
-        const norm = normalize(text);
-        if (!norm) continue;
-
-        // A PDF text layer is not automatically trustworthy: drawings that were
-        // scanned and re-OCR'd upstream carry a text layer with exactly the same
-        // glyph confusions as our own OCR, so it gets the same matcher.
-        const m = matchWindow(norm, query);
-        if (!m) continue;
-
-        idxs.forEach(i => covered.add(i));
-        results.push({
-          page: pageNum, source: 'text', text: text,
-          itemIndices: idxs, confidence: null,
-          fuzzy: m.fuzzy, confused: m.confused, matchPos: m.pos, matchLen: m.len
-        });
-      }
+    // A PDF text layer is not automatically trustworthy: drawings that were
+    // scanned and re-OCR'd upstream carry a text layer with exactly the same
+    // glyph confusions as our own OCR, so it gets the same matcher.
+    for (const hit of findWindowMatches(items, query, {
+      maxWindow: MAX_WINDOW, gapFactor: JOIN_GAP_FACTOR, join: '',
+    })) {
+      results.push({
+        page: pageNum, source: 'text', text: hit.text,
+        itemIndices: hit.items.map(it => it.key), confidence: null,
+        fuzzy: hit.match.fuzzy, confused: hit.match.confused,
+        matchPos: hit.match.pos, matchLen: hit.match.len
+      });
     }
   }
   return results;

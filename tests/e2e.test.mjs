@@ -75,10 +75,21 @@ const errors = [];
 page.on('pageerror', e => errors.push('pageerror: ' + e.message));
 page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
 
-await page.route('https://cdn.jsdelivr.net/**', async (route) => {
-  const file = path.join(VENDOR, path.basename(new URL(route.request().url()).pathname));
-  if (!existsSync(file)) return route.abort();
-  route.fulfill({ status: 200, contentType: 'text/javascript', body: await readFile(file) });
+// pdf.js, tesseract.js, its worker/core, and the language data all come from
+// tests/vendor/ so a run needs no network at all.
+const MIME = { '.js': 'text/javascript', '.wasm': 'application/wasm', '.gz': 'application/octet-stream' };
+await page.route(/cdn\.jsdelivr\.net|tessdata\.projectnaptha\.com/, async (route) => {
+  const name = path.basename(new URL(route.request().url()).pathname);
+  const file = path.join(VENDOR, name);
+  if (!existsSync(file)) {
+    console.log(`    (not vendored, aborting: ${name})`);
+    return route.abort();
+  }
+  route.fulfill({
+    status: 200,
+    contentType: MIME[path.extname(name)] || 'application/octet-stream',
+    body: await readFile(file),
+  });
 });
 
 await page.goto(base + 'index.html');
@@ -132,6 +143,31 @@ await page.click('#resultsList .result-item');
 await page.waitForTimeout(500);
 check('clicking a result jumps to its page',
   (await page.inputValue('#pageNumInput')) === '2', await page.inputValue('#pageNumInput'));
+
+// ---- the OCR path -------------------------------------------------------
+// A page with almost no text layer falls through to OCR (TEXT_LEN_THRESHOLD),
+// so this exercises render -> binarize -> Tesseract -> word joining -> match
+// on the built page, which the unit tests can't reach.
+if (process.env.SKIP_OCR) {
+  console.log('  skip OCR path (SKIP_OCR set)');
+} else {
+  const ocrPath = path.join(dir, 'ocr.pdf');
+  writeFileSync(ocrPath, makePdf([[{ text: 'PT-9042', x: 20, y: 60, size: 24 }]],
+    { width: 260, height: 120 }));
+  await page.setInputFiles('#fileInput', ocrPath);
+  await page.waitForFunction(
+    () => document.querySelector('#procDetailText').textContent.includes('via OCR'),
+    null, { timeout: 180000 });
+  check('a page with no real text layer is routed to OCR', true);
+
+  // This page has a thin text layer AND was OCR'd, so both sources report it —
+  // which is the intended behaviour (pageHasImage / TEXT_LEN_THRESHOLD), and
+  // the OCR row is the one that proves the pixel path works end to end.
+  const r = await search('PT-9042');
+  check('OCR-read tag is found', r.length >= 1, JSON.stringify(r));
+  check('an OCR row is present, not only the text-layer row',
+    r.some(x => x.badges.includes('OCR')), JSON.stringify(r.map(x => x.badges)));
+}
 
 check('no script errors during the whole run', errors.length === 0, errors.join(' | '));
 

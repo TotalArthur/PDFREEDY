@@ -596,11 +596,81 @@
     return null;
   }
 
+  // src/lib/windows.js
+  function findWindowMatches(items, query, opts) {
+    const { maxWindow, gapFactor, join = "", transform = null } = opts;
+    const results = [];
+    const covered = /* @__PURE__ */ new Set();
+    for (let winSize = 1; winSize <= maxWindow; winSize++) {
+      for (let start = 0; start + winSize <= items.length; start++) {
+        const win = items.slice(start, start + winSize);
+        if (win.some((it) => covered.has(it.key))) continue;
+        if (winSize > 1) {
+          let tooFar = false;
+          for (let k = 0; k < win.length - 1; k++) {
+            const gap = win[k + 1].rs - win[k].re;
+            if (gap > win[k].rh * gapFactor) {
+              tooFar = true;
+              break;
+            }
+          }
+          if (tooFar) continue;
+        }
+        const rawText = win.map((it) => it.text).join(winSize > 1 ? join : "");
+        const fixed = transform ? transform(rawText) : null;
+        const text = fixed || rawText;
+        const norm = normalize(text);
+        if (!norm) continue;
+        const match = matchWindow(norm, query);
+        if (!match) continue;
+        win.forEach((it) => covered.add(it.key));
+        results.push({ items: win, text, rawText, corrected: !!fixed, match });
+      }
+    }
+    return results;
+  }
+
   // src/app/config.js
   var OCR_SCALE = 3.5;
   var TEXT_LEN_THRESHOLD = 20;
   var JOIN_GAP_FACTOR = 2.2;
   var MAX_WINDOW = 6;
+  var TESSERACT_INIT = {
+    load_system_dawg: "0",
+    load_freq_dawg: "0",
+    load_punc_dawg: "0",
+    load_number_dawg: "0",
+    load_unambig_dawg: "0",
+    load_bigram_dawg: "0"
+  };
+  function tesseractParams(PSM) {
+    return {
+      // P&ID sheets are mostly line art with sparse, scattered labels, not
+      // paragraphs — SPARSE_TEXT skips Tesseract's column/block layout analysis
+      // (the slow, and on a drawing often wrong, part of the default "fully
+      // automatic" mode) and just hunts for text directly.
+      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+      // Narrowing the character set cuts down on stray-symbol noise (stuff like
+      // "=", "©", "•" picked up from line art) and measurably helps both accuracy
+      // and decoding speed for tag-style text.
+      // Uppercase only. Every comparison in this tool runs through normalize(),
+      // which upper-cases anyway, so a lowercase alphabet can never help a match
+      // — it only gives the decoder extra ways to be wrong (picking 'l' over '1',
+      // 'o' over '0'). Removing it strictly shrinks the error space.
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,:()#&+ "
+      // NOTE: user_defined_dpi is deliberately NOT set here.
+      //
+      // Left unset, Tesseract guesses the resolution per image and guesses
+      // differently for the same source at different scales, which is unsatisfying
+      // — but declaring 72 * OCR_SCALE measured WORSE on the bench corpus
+      // (`node bench/eval.mjs`, pipeline nodict_dpi), and for a good reason: the
+      // render scale says how big the page is, not how big the glyphs are. A
+      // low-resolution raster pasted into a large page renders at 252 dpi and
+      // still has 9-pixel characters. The right value comes from measuring glyph
+      // height on the binary plane; until that measurement exists, an unset value
+      // beats a confidently wrong one.
+    };
+  }
 
   // src/lib/geometry.js
   function applyMatrix(m, x, y) {
@@ -752,26 +822,8 @@
   // src/app/ocr.js
   async function ensureOcrWorker() {
     if (!S.ocrWorker) {
-      S.ocrWorker = await Tesseract.createWorker("eng");
-      await S.ocrWorker.setParameters({
-        // P&ID sheets are mostly line art with sparse, scattered labels, not
-        // paragraphs — SPARSE_TEXT skips Tesseract's column/block layout
-        // analysis (the slow, and on a drawing often wrong, part of the
-        // default "fully automatic" mode) and just hunts for text directly.
-        tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
-        // Narrowing the character set cuts down on stray-symbol noise (stuff
-        // like "=", "©", "•" picked up from line art) and measurably helps
-        // both accuracy and decoding speed for tag-style text.
-        // Uppercase only. Every comparison in this tool runs through normalize(),
-        // which upper-cases anyway, so a lowercase alphabet can never help a match
-        // — it only gives the decoder extra ways to be wrong (picking 'l' over '1',
-        // 'o' over '0'). Removing it strictly shrinks the error space.
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.,:()#&+ ",
-        // Tag callouts are standalone strings, not prose — Tesseract's built-in
-        // English dictionary can only drag a correct read toward a real word.
-        load_system_dawg: "0",
-        load_freq_dawg: "0"
-      });
+      S.ocrWorker = await Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {}, TESSERACT_INIT);
+      await S.ocrWorker.setParameters(tesseractParams(Tesseract.PSM));
     }
     return S.ocrWorker;
   }
@@ -833,49 +885,29 @@
     if (!data || !data.ocrLines) return [];
     const results = [];
     for (const line of data.ocrLines) {
-      const words = line.words;
-      const covered = /* @__PURE__ */ new Set();
-      for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
-        for (let start = 0; start + winSize <= words.length; start++) {
-          const win = words.slice(start, start + winSize);
-          const wIdxs = win.map((_, k) => start + k);
-          if (wIdxs.some((i) => covered.has(i))) continue;
-          if (winSize > 1) {
-            let tooFar = false;
-            for (let k = 0; k < win.length - 1; k++) {
-              const a = win[k], b2 = win[k + 1];
-              const gap = b2.rs - a.re;
-              if (gap > a.rh * JOIN_GAP_FACTOR) {
-                tooFar = true;
-                break;
-              }
-            }
-            if (tooFar) continue;
-          }
-          const rawText = win.map((w) => w.text).join(win.length > 1 ? " " : "");
-          const fixed = getCorrection(rawText);
-          const text = fixed || rawText;
-          const norm = normalize(text);
-          if (!norm) continue;
-          const m = matchWindow(norm, query);
-          if (!m) continue;
-          wIdxs.forEach((i) => covered.add(i));
-          const b = boundsOfPoints(win.flatMap((w) => [[w.bbox.x0, w.bbox.y0], [w.bbox.x1, w.bbox.y1]]));
-          const avgConf = win.reduce((s, w) => s + w.confidence, 0) / win.length;
-          results.push({
-            page: pageNum,
-            source: "ocr",
-            text,
-            rawText,
-            corrected: !!fixed,
-            bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
-            confidence: avgConf,
-            fuzzy: m.fuzzy,
-            confused: m.confused,
-            matchPos: m.pos,
-            matchLen: m.len
-          });
-        }
+      const items = line.words.map((w, i) => ({ key: i, text: w.text, rs: w.rs, re: w.re, rh: w.rh, word: w }));
+      for (const hit of findWindowMatches(items, query, {
+        maxWindow: MAX_WINDOW,
+        gapFactor: JOIN_GAP_FACTOR,
+        join: " ",
+        transform: getCorrection
+      })) {
+        const win = hit.items.map((it) => it.word);
+        const b = boundsOfPoints(win.flatMap((w) => [[w.bbox.x0, w.bbox.y0], [w.bbox.x1, w.bbox.y1]]));
+        const avgConf = win.reduce((s, w) => s + w.confidence, 0) / win.length;
+        results.push({
+          page: pageNum,
+          source: "ocr",
+          text: hit.text,
+          rawText: hit.rawText,
+          corrected: hit.corrected,
+          bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
+          confidence: avgConf,
+          fuzzy: hit.match.fuzzy,
+          confused: hit.match.confused,
+          matchPos: hit.match.pos,
+          matchLen: hit.match.len
+        });
       }
     }
     return results;
@@ -1607,42 +1639,29 @@
     if (!data || !data.lineGroups) return [];
     const results = [];
     for (const line of data.lineGroups) {
-      const covered = /* @__PURE__ */ new Set();
-      for (let winSize = 1; winSize <= MAX_WINDOW; winSize++) {
-        for (let start = 0; start + winSize <= line.length; start++) {
-          const windowEntries = line.slice(start, start + winSize);
-          const idxs = windowEntries.map((e) => e.idx);
-          if (idxs.some((i) => covered.has(i))) continue;
-          if (winSize > 1) {
-            let tooFar = false;
-            for (let k = 0; k < windowEntries.length - 1; k++) {
-              const a = windowEntries[k], b = windowEntries[k + 1];
-              const gap = b.parallel - (a.parallel + a.item.width);
-              if (gap > a.fontSize * JOIN_GAP_FACTOR) {
-                tooFar = true;
-                break;
-              }
-            }
-            if (tooFar) continue;
-          }
-          const text = windowEntries.map((e) => e.item.str).join("");
-          const norm = normalize(text);
-          if (!norm) continue;
-          const m = matchWindow(norm, query);
-          if (!m) continue;
-          idxs.forEach((i) => covered.add(i));
-          results.push({
-            page: pageNum,
-            source: "text",
-            text,
-            itemIndices: idxs,
-            confidence: null,
-            fuzzy: m.fuzzy,
-            confused: m.confused,
-            matchPos: m.pos,
-            matchLen: m.len
-          });
-        }
+      const items = line.map((e) => ({
+        key: e.idx,
+        text: e.item.str,
+        rs: e.parallel,
+        re: e.parallel + e.item.width,
+        rh: e.fontSize
+      }));
+      for (const hit of findWindowMatches(items, query, {
+        maxWindow: MAX_WINDOW,
+        gapFactor: JOIN_GAP_FACTOR,
+        join: ""
+      })) {
+        results.push({
+          page: pageNum,
+          source: "text",
+          text: hit.text,
+          itemIndices: hit.items.map((it) => it.key),
+          confidence: null,
+          fuzzy: hit.match.fuzzy,
+          confused: hit.match.confused,
+          matchPos: hit.match.pos,
+          matchLen: hit.match.len
+        });
       }
     }
     return results;
