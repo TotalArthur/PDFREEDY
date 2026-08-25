@@ -1,37 +1,19 @@
 #!/usr/bin/env node
 /*
- * Dependency-free tests for the two pieces of index.html that decide whether a
- * tag is found: the confusion-tolerant matcher and the rotated-text reading
- * axis. Both are pure functions, so they are lifted straight out of the single
- * HTML file by name and exercised here — no build step, no bundler, no deps.
+ * Tests for the two pieces that decide whether a tag is found: the
+ * confusion-tolerant matcher and the rotated-text reading axis. Both are pure
+ * functions living in src/lib/, imported directly — no build step needed to
+ * run these, even though the shipped page is built.
  *
  *   node tests/matching.test.js
  */
-const fs = require('fs');
-const path = require('path');
+import { normalize, levenshtein } from '../src/lib/text.js';
+import { charsConfusable, confusableIndexOf } from '../src/lib/confusion.js';
+import { matchWindow } from '../src/lib/matching.js';
+import { mapBoxBack, readingAxis, boundsOfPoints } from '../src/lib/geometry.js';
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-
-function grab(startMarker, endMarker) {
-  const i = html.indexOf(startMarker);
-  if (i < 0) throw new Error('marker not found in index.html: ' + startMarker);
-  const j = html.indexOf(endMarker, i);
-  if (j < 0) throw new Error('end marker not found in index.html: ' + endMarker);
-  return html.slice(i, j);
-}
-
-const source = [
-  grab('function normalize(s)', 'function clamp('),
-  grab('const CONFUSION_CLASSES', 'OCR corrections'),
-  grab('function levenshtein', 'function escapeHtml'),
-  grab('function boundsOfPoints', 'function levenshtein'),
-  grab('function inverseRotatePoint', 'async function runOcrForPage'),
-].join('\n');
-
-const M = new Function(source + `
-  return { normalize, charsConfusable, confusableIndexOf, matchWindow,
-           levenshtein, mapBoxBack, readingAxis, boundsOfPoints };
-`)();
+const M = { normalize, charsConfusable, confusableIndexOf, matchWindow,
+            levenshtein, mapBoxBack, readingAxis, boundsOfPoints };
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -62,6 +44,38 @@ for (const [read, tag, want] of cases) {
   const m = M.matchWindow(M.normalize(read), Q(tag));
   check(`${read} ~ ${tag}`, !!m === want);
   console.log(`  ${(!!m === want) ? 'ok  ' : 'BAD '} ${read.padEnd(30)} vs ${tag.padEnd(28)} -> ${m ? 'match (confused=' + m.confused + ')' : 'no match'}`);
+}
+
+// ---------------------------------------------------------------------------
+section('Dropped characters: what blur actually does to a tag');
+// Every one of these is a real read from bench/eval.mjs. The old matcher
+// compared position by position at a fixed length and could only substitute, so
+// all of them were invisible to it — the read is SHORTER than the query, which
+// defeats plain substring search too.
+const dropped = [
+  ['FC2015',           'FIC-2015',           true,  'lost the I'],
+  ['X-3308',           'XV-3308',            true,  'lost the V'],
+  ['TSH 6802',         'TSHH-6802',          true,  'lost an H'],
+  ['-P-1052-A1A-HC',   '6"-P-1052-A1A-HC',   true,  'lost the leading 6"'],
+  ['V-B80115PWA',      'V-6801-15PW4',       true,  '6->B and 4->A'],
+  ['LT-41004',         'LT-11004',           true,  '1->4'],
+  // Precision: a deletion must not become a back door for a substitution the
+  // confusion table forbids. The two edge cases below are the ones that matter
+  // — a trailing or leading delete plus the free prefix/suffix of a substring
+  // search would otherwise let any tag match its neighbour.
+  //
+  // A mid-string deletion is a different matter: PT-1104 really could be a
+  // different tag, and it will now match a search for PT-11004. That is the
+  // cost of finding tags whose characters blur away, and it is why every hit
+  // that needed damage to match is badged rather than presented as fact.
+  ['PT-11005',         'PT-11004',           false, 'trailing char differs, not missing'],
+  ['XT-11004',         'PT-11004',           false, 'leading char differs, not missing'],
+  ['PT-1104',          'PT-11004',           true,  'lost a 0 mid-string'],
+];
+for (const [read, tag, want, why] of dropped) {
+  const m = M.matchWindow(M.normalize(read), Q(tag));
+  check(`${read} ~ ${tag} (${why})`, !!m === want);
+  console.log(`  ${(!!m === want) ? 'ok  ' : 'BAD '} ${read.padEnd(18)} vs ${tag.padEnd(20)} -> ${m ? `match (cost ${m.cost.toFixed(2)}, ${m.subs} subs, ${m.indels} indel)` : 'no match'}`);
 }
 
 section('Confusion matching: precision guards');
