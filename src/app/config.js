@@ -9,6 +9,15 @@ const MAX_WINDOW = 6;                // max consecutive items/words joined when 
 // page's existing words rather than replacing them.
 const ROTATIONS = [0, 90, 180, 270];
 
+// Tesseract workers in the pool. One core is left for the UI thread (canvas
+// rendering, DOM updates) so OCR throughput doesn't come at the cost of a
+// stuttering interface. Clamped to [1, 8]: hardwareConcurrency can be 1 (a
+// throttled VM) or absent (older browsers report undefined) on the low end,
+// and unbounded on the high end where more workers just means more idle
+// wasm instances fighting over the same disk-cached model.
+const OCR_POOL_SIZE = Math.max(1, Math.min(8,
+  (typeof navigator !== 'undefined' && navigator.hardwareConcurrency || 4) - 1));
+
 // =======================================================================
 // Tesseract configuration
 //
@@ -65,4 +74,4 @@ function tesseractParams(PSM) {
 }
 
 export { OCR_SCALE, TEXT_LEN_THRESHOLD, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS,
-         TESSERACT_INIT, tesseractParams };
+         OCR_POOL_SIZE, TESSERACT_INIT, tesseractParams };

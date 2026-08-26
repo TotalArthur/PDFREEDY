@@ -488,8 +488,8 @@
     lastResults: [],
     // current search result set
     activeResultIndex: -1,
-    ocrWorker: null,
-    // lazily-created shared tesseract worker
+    ocrScheduler: null,
+    // lazily-created tesseract worker pool (Tesseract.createScheduler)
     currentRenderTask: null,
     // in-flight pdf.js render on the page canvas
     // Bumped every time a document is loaded/cleared. Background work captures the
@@ -497,7 +497,6 @@
     // a previous PDF can't overwrite the new document's status, badge or ticker.
     docEpoch: 0,
     processingCancelled: false,
-    skipCurrentPageRequested: false,
     isBackgroundRunning: false,
     currentQuery: { raw: "", norm: "", exactOnly: false, fuzzy: false },
     tickerHandle: null,
@@ -1092,6 +1091,10 @@
   var JOIN_GAP_FACTOR = 2.2;
   var MAX_WINDOW = 6;
   var ROTATIONS = [0, 90, 180, 270];
+  var OCR_POOL_SIZE = Math.max(1, Math.min(
+    8,
+    (typeof navigator !== "undefined" && navigator.hardwareConcurrency || 4) - 1
+  ));
   var TESSERACT_INIT = {
     load_system_dawg: "0",
     load_freq_dawg: "0",
@@ -1456,12 +1459,25 @@
   }
 
   // src/app/ocr.js
-  async function ensureOcrWorker() {
-    if (!S.ocrWorker) {
-      S.ocrWorker = await Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {}, TESSERACT_INIT);
-      await S.ocrWorker.setParameters(tesseractParams(Tesseract.PSM));
+  async function createOcrWorker() {
+    const worker = await Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {}, TESSERACT_INIT);
+    await worker.setParameters(tesseractParams(Tesseract.PSM));
+    return worker;
+  }
+  async function ensureOcrScheduler() {
+    if (!S.ocrScheduler) {
+      const scheduler = Tesseract.createScheduler();
+      S.ocrScheduler = scheduler;
+      scheduler.addWorker(await createOcrWorker());
+      for (let i = 1; i < OCR_POOL_SIZE; i++) {
+        createOcrWorker().then((worker) => {
+          if (S.ocrScheduler === scheduler) scheduler.addWorker(worker);
+          else worker.terminate().catch(() => {
+          });
+        });
+      }
     }
-    return S.ocrWorker;
+    return S.ocrScheduler;
   }
   async function runOcrForPage(pageNum, onProgress) {
     const epoch = S.docEpoch;
@@ -1483,19 +1499,26 @@
     const W = base.width, H = base.height;
     const allWords = [];
     const completed = [];
-    const worker = await ensureOcrWorker();
-    for (let i = 0; i < rotations.length; i++) {
-      if (S.processingCancelled || S.skipCurrentPageRequested || epoch !== S.docEpoch) break;
-      const deg = rotations[i];
-      onProgress(i + 1, rotations.length);
+    if (S.processingCancelled || data.skipRequested || epoch !== S.docEpoch) return data;
+    const scheduler = await ensureOcrScheduler();
+    let finished = 0;
+    onProgress(0, rotations.length);
+    const passes = await Promise.all(rotations.map(async (deg) => {
       const rotated = deg === 0 ? ocrBase : rotateCanvas(ocrBase, deg);
-      let result;
       try {
-        result = await worker.recognize(rotated);
+        const result = await scheduler.addJob("recognize", rotated);
+        return { deg, result };
       } catch (err) {
         console.warn("OCR pass failed", pageNum, deg, err);
-        continue;
+        return null;
+      } finally {
+        finished++;
+        onProgress(finished, rotations.length);
       }
+    }));
+    for (const pass of passes) {
+      if (!pass) continue;
+      const { deg, result } = pass;
       const lines = result.data && result.data.lines || [];
       for (const line of lines) {
         const mappedWords = [];
@@ -1584,24 +1607,30 @@
     if (!S.tickerHandle) S.tickerHandle = setInterval(updateProcSummary, 500);
     runQueue(epoch);
   }
-  async function runQueue(epoch) {
-    while (!S.processingCancelled && epoch === S.docEpoch) {
-      let target = null;
-      const cd = S.pageData.get(S.currentPage);
-      if (cd && cd.status === "pending") target = S.currentPage;
-      if (target === null) {
-        for (let p = 1; p <= S.numPages; p++) {
-          const d = S.pageData.get(p);
-          if (d && d.status === "pending") {
-            target = p;
-            break;
-          }
-        }
-      }
-      if (target === null) break;
-      await processPage(target, epoch);
-      await new Promise((r) => setTimeout(r, 0));
+  function nextPendingPage() {
+    const cd = S.pageData.get(S.currentPage);
+    if (cd && cd.status === "pending") return S.currentPage;
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
+      if (d && d.status === "pending") return p;
     }
+    return null;
+  }
+  async function runQueue(epoch) {
+    const concurrency = Math.max(1, OCR_POOL_SIZE);
+    const inFlight = /* @__PURE__ */ new Set();
+    while (!S.processingCancelled && epoch === S.docEpoch) {
+      while (inFlight.size < concurrency) {
+        const target = nextPendingPage();
+        if (target === null) break;
+        const task = processPage(target, epoch);
+        task.finally(() => inFlight.delete(task));
+        inFlight.add(task);
+      }
+      if (inFlight.size === 0) break;
+      await Promise.race(inFlight);
+    }
+    await Promise.allSettled(inFlight);
     if (epoch !== S.docEpoch) return;
     S.isBackgroundRunning = false;
     if (S.tickerHandle) {
@@ -1635,7 +1664,7 @@
       data.status = "ocr-running";
       data.ocrPassNum = 0;
       data.stepStartedAt = Date.now();
-      S.skipCurrentPageRequested = false;
+      data.skipRequested = false;
       if (pageNum === S.currentPage) {
         skipPageBtn.disabled = false;
         updatePageBadge();
@@ -1648,12 +1677,11 @@
           data.stepStartedAt = Date.now();
           updateProcSummary();
         });
-        data.status = S.skipCurrentPageRequested ? "skipped" : "ocr-done";
+        data.status = data.skipRequested ? "skipped" : "ocr-done";
       } catch (err) {
         console.error("OCR failed on page", pageNum, err);
         data.status = "error";
       }
-      S.skipCurrentPageRequested = false;
       if (epoch !== S.docEpoch) return;
       if (pageNum === S.currentPage) skipPageBtn.disabled = true;
     }
@@ -1718,11 +1746,14 @@
     viewerLoading.classList.remove("visible");
   }
   skipPageBtn.addEventListener("click", () => {
-    S.skipCurrentPageRequested = true;
+    const d = S.pageData.get(S.currentPage);
+    if (d) d.skipRequested = true;
   });
   cancelProcBtn.addEventListener("click", () => {
     S.processingCancelled = true;
-    S.skipCurrentPageRequested = true;
+    for (const d of S.pageData.values()) {
+      if (d.status === "ocr-running") d.skipRequested = true;
+    }
     cancelProcBtn.disabled = true;
   });
   rotatedTextToggle.addEventListener("change", () => {
@@ -2274,7 +2305,6 @@
     S.lastResults = [];
     S.activeResultIndex = -1;
     S.processingCancelled = true;
-    S.skipCurrentPageRequested = false;
     S.isBackgroundRunning = false;
     if (S.currentRenderTask) {
       try {
@@ -2287,10 +2317,10 @@
       clearInterval(S.tickerHandle);
       S.tickerHandle = null;
     }
-    if (S.ocrWorker) {
-      S.ocrWorker.terminate().catch(() => {
+    if (S.ocrScheduler) {
+      S.ocrScheduler.terminate().catch(() => {
       });
-      S.ocrWorker = null;
+      S.ocrScheduler = null;
     }
     resultsList.innerHTML = '<div class="empty-note">Load a PDF and run a search to see matches here.</div>';
     resultsCount.textContent = "Results";

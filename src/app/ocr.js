@@ -2,7 +2,7 @@ import { S } from './state.js';
 import { findWindowMatches } from '../lib/windows.js';
 import { conditionForOcr, rotateCanvas, stripLineArt } from '../lib/preprocess.js';
 import { mapBoxBack, readingAxis, boundsOfPoints } from '../lib/geometry.js';
-import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS, TESSERACT_INIT, tesseractParams } from './config.js';
+import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS, OCR_POOL_SIZE, TESSERACT_INIT, tesseractParams } from './config.js';
 import { getPageProxy } from './pdf.js';
 import { getCorrection } from './corrections.js';
 import {
@@ -14,14 +14,43 @@ import {
 // canvases and the "normal" (0deg) page canvas is done with plain pixel
 // math since rotations are exact 90deg multiples.
 // =======================================================================
-async function ensureOcrWorker() {
-  if (!S.ocrWorker) {
-    // The 4th argument is the init config — see TESSERACT_INIT for why the
-    // dictionary flags have to go there and not through setParameters.
-    S.ocrWorker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {}, TESSERACT_INIT);
-    await S.ocrWorker.setParameters(tesseractParams(Tesseract.PSM));
+async function createOcrWorker() {
+  // The 4th argument is the init config — see TESSERACT_INIT for why the
+  // dictionary flags have to go there and not through setParameters.
+  const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {}, TESSERACT_INIT);
+  await worker.setParameters(tesseractParams(Tesseract.PSM));
+  return worker;
+}
+
+// A scheduler with up to OCR_POOL_SIZE workers so independent recognize()
+// calls — a page's separate rotation passes, or separate pages in the
+// background queue — actually run on separate cores instead of queueing
+// behind one worker.
+//
+// Only the first worker is awaited here; it costs exactly what the single
+// shared worker used to cost, so a short document (the common case — most
+// pages take one pass) starts its first recognize() no slower than before
+// this pool existed. The rest of the pool spins up in the background and
+// joins the scheduler as each worker finishes initializing (wasm compile +
+// model load), so a document with enough work to actually benefit from more
+// workers still gets them, without every document paying to cold-start
+// OCR_POOL_SIZE workers up front for OCR it may only ever do one pass of.
+async function ensureOcrScheduler() {
+  if (!S.ocrScheduler) {
+    const scheduler = Tesseract.createScheduler();
+    S.ocrScheduler = scheduler;
+    scheduler.addWorker(await createOcrWorker());
+    for (let i = 1; i < OCR_POOL_SIZE; i++) {
+      createOcrWorker().then(worker => {
+        // A document loaded (or cleared) while this worker was still coming
+        // up replaces S.ocrScheduler — joining the old, discarded one would
+        // leak a worker nothing will ever terminate.
+        if (S.ocrScheduler === scheduler) scheduler.addWorker(worker);
+        else worker.terminate().catch(() => {});
+      });
+    }
   }
-  return S.ocrWorker;
+  return S.ocrScheduler;
 }
 
 async function runOcrForPage(pageNum, onProgress) {
@@ -64,21 +93,39 @@ async function runOcrForPage(pageNum, onProgress) {
   const W = base.width, H = base.height;
   const allWords = [];   // flattened, coordinates already mapped back to C0 space
   const completed = [];  // rotations that actually finished, so a cancelled pass is retried
-  const worker = await ensureOcrWorker();
 
-  for (let i = 0; i < rotations.length; i++) {
-    if (S.processingCancelled || S.skipCurrentPageRequested || epoch !== S.docEpoch) break;
-    const deg = rotations[i];
-    onProgress(i+1, rotations.length);
+  // A cancel/skip/new-document that landed while this page was still waiting
+  // its turn in the queue means don't even start — but once we do start, all
+  // of this page's rotations are dispatched together (see below), so there is
+  // no later "in-between passes" point to bail out at.
+  if (S.processingCancelled || data.skipRequested || epoch !== S.docEpoch) return data;
 
+  const scheduler = await ensureOcrScheduler();
+
+  // Every rotation this page still needs is queued on the pool at once rather
+  // than run one at a time on a single worker — with OCR_POOL_SIZE workers
+  // available, a 4-pass "also scan rotated text" run costs roughly one pass'
+  // wall time instead of four. Promise.all preserves input order regardless
+  // of completion order, so `passes` still lines up with `rotations`.
+  let finished = 0;
+  onProgress(0, rotations.length);
+  const passes = await Promise.all(rotations.map(async (deg) => {
     const rotated = deg === 0 ? ocrBase : rotateCanvas(ocrBase, deg);
-    let result;
     try {
-      result = await worker.recognize(rotated);
+      const result = await scheduler.addJob('recognize', rotated);
+      return { deg, result };
     } catch (err) {
       console.warn('OCR pass failed', pageNum, deg, err);
-      continue;
+      return null;
+    } finally {
+      finished++;
+      onProgress(finished, rotations.length);
     }
+  }));
+
+  for (const pass of passes) {
+    if (!pass) continue;
+    const { deg, result } = pass;
     const lines = (result.data && result.data.lines) || [];
     for (const line of lines) {
       const mappedWords = [];
@@ -157,7 +204,7 @@ function searchOcr(pageNum, query) {
 }
 
 export {
-  ensureOcrWorker,
+  ensureOcrScheduler,
   runOcrForPage,
   searchOcr,
 };

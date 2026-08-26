@@ -12,14 +12,13 @@ const S = {
   pageData: new Map(),         // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen }
   lastResults: [],             // current search result set
   activeResultIndex: -1,
-  ocrWorker: null,             // lazily-created shared tesseract worker
+  ocrScheduler: null,          // lazily-created tesseract worker pool (Tesseract.createScheduler)
   currentRenderTask: null,     // in-flight pdf.js render on the page canvas
   // Bumped every time a document is loaded/cleared. Background work captures the
   // epoch it started under and bails out once it's stale, so a queue belonging to
   // a previous PDF can't overwrite the new document's status, badge or ticker.
   docEpoch: 0,
   processingCancelled: false,
-  skipCurrentPageRequested: false,
   isBackgroundRunning: false,
   currentQuery: { raw: '', norm: '', exactOnly: false, fuzzy: false },
   tickerHandle: null,
