@@ -29,7 +29,7 @@ const BAND_LABEL = {
 const BAND_NOTE = {
   confirmed: '',
   likely: 'Matched through characters that render identically at drawing scale (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z).',
-  possible: 'Matched only by allowing heavier damage — a substitution that needs a soft image to explain, or a character OCR lost entirely. Verify against the crop before using these.',
+  possible: 'Matched across something OCR could not read, or could only read as a different character. Often right — it is how a tag under a smudge gets found at all — but check each against its crop. The notes under each row say what the evidence is.',
 };
 
 // Tier-1 substitution cost, from the confusion table. A match whose total cost
@@ -51,6 +51,10 @@ const T1_COST = 0.12;
 function bandOf(res) {
   if (res.fuzzy) return 'possible';
   if (res.indels > 0) return 'possible';
+  // Matched across a character the engine could not read. Often the right
+  // answer — it is how the 58134 case is found at all — but it is still a guess
+  // about a mark nobody could make out, so it goes where guesses go.
+  if (res.unknowns > 0) return 'possible';
   if (!res.cost) return 'confirmed';
   // Missing evidence is not a reason to promote a hit. If a caller hasn't
   // carried the substitution count through, the honest answer is "check it".

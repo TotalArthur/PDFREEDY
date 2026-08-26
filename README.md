@@ -44,8 +44,59 @@ test-fixture patterns, but check `git status` before you commit anyway.
   characters, it erases them. `FIC-2015` comes back as `FC2015`, `XV-3308` as
   `X-3308`. See below.
 - **Exact match** toggle for strict whole-string matching.
-- **Fuzzy** toggle uses Levenshtein distance to surface near-misses. Off by default,
-  because guesses shouldn't look like certainties.
+- **Confidence-aware** — a character OCR admitted it couldn't read is cheap to
+  match across; one it was sure of is not. See below.
+- **Fuzzy** toggle is the last resort: it treats *every* character as uncertain,
+  not just the ones OCR flagged. Off by default, because guesses shouldn't look
+  like certainties.
+
+### "I couldn't read that" is not evidence against a match
+
+OCR reports how sure it was of every word. That number used to be printed on the
+result row and otherwise ignored — a character read at 0% cost exactly as much to
+overlook as one read at 99%. Those are not the same claim at all. A 0% read is the
+engine saying *I can't make this out*; an 87% read is a confident disagreement.
+
+Now an unlisted substitution is allowed, priced inversely to how sure the engine
+was: `0.5 / (1 − confidence)`. There is no threshold to tune — the cost simply
+runs away as confidence rises, and at full confidence it is impossible.
+
+| OCR was | replacing that character costs | |
+|---|---|---|
+| 0% sure | 0.50 | affordable for any tag |
+| 50% sure | 1.00 | only for a long tag with a lot else corroborating |
+| 87% sure | 3.85 | never |
+| certain | — | impossible |
+
+This is self-limiting: it can only ever be spent where the engine already admitted
+defeat, which on a real sheet is a handful of places.
+
+It is what makes this case work. A drawing reads `18-6-MC-58134-1C3B1`; OCR
+returns `B81 34` at 0% confidence; a search for `58134` now finds it — while
+`58116`, read confidently at 87%, correctly does not match.
+
+Characters from a real PDF text layer count as certain, because they aren't a
+guess: nobody read them off pixels.
+
+### Results are ranked by evidence, and say why
+
+Ordering used to be page number, so a confident wrong answer could outrank a
+corroborated right one. Now each hit is scored on what can actually be known
+about it — how much of the tag matched outright, how sure OCR was of the parts
+that didn't, how much text around it corroborates it, and whether it occupies a
+whole field between separators rather than sitting inside a longer string.
+
+The reasoning goes on the row, in words, so you can disagree with it:
+
+> 4 of 5 characters matched exactly.
+> The one that differs was read at 0% confidence — OCR could not make it out.
+> Surrounded by 10 characters of text that read at 93% confidence.
+> It occupies a whole field, between separators.
+
+versus
+
+> 3 of 5 characters matched.
+> Nothing around it corroborates it.
 
 ### Results are banded by how sure the tool is
 

@@ -25,7 +25,7 @@ import { findWindowMatches } from '../src/lib/windows.js';
 import { conditionForOcr, setCanvasFactory } from '../src/lib/preprocess.js';
 import { JOIN_GAP_FACTOR, MAX_WINDOW, TESSERACT_INIT, tesseractParams } from '../src/app/config.js';
 import { TAGS, CONDITIONS } from './corpus.mjs';
-import { renderTag } from './render.mjs';
+import { renderTag, renderTagInContext } from './render.mjs';
 
 setCanvasFactory(() => createCanvas(1, 1));
 
@@ -52,6 +52,7 @@ const PIPELINES = {
     params: { ...BASE_PARAMS, load_system_dawg: '0', load_freq_dawg: '0' },
     mode: 'binarize',
     allowIndels: false,
+    ignoreConfidence: true,
   },
   nodict: {
     label: 'dictionaries actually off (init config), adaptive binarize',
@@ -70,6 +71,14 @@ const PIPELINES = {
     init: TESSERACT_INIT,
     params: BASE_PARAMS,
     mode: 'flatten',
+  },
+  auto_noconf: {
+    label: 'current conditioning and matching, but ignoring what OCR said it was sure of',
+    init: TESSERACT_INIT,
+    params: BASE_PARAMS,
+    mode: 'auto',
+    allowIndels: true,
+    ignoreConfidence: true,
   },
   auto_nodeep: {
     label: 'current conditioning, but matching restricted to substitutions',
@@ -107,6 +116,9 @@ function wordsToItems(data) {
   return words.map((w, i) => ({
     key: i, text: w.text.trim(),
     rs: w.bbox.x0, re: w.bbox.x1, rh: w.bbox.y1 - w.bbox.y0,
+    // What the engine reported about this word. A word it read at 0% is an
+    // admission, and the matcher is allowed to substitute across it cheaply.
+    conf: Math.max(0, Math.min(1, (w.confidence || 0) / 100)),
   }));
 }
 
@@ -120,7 +132,7 @@ async function runPipeline(name) {
     let found = 0, exact = 0;
     const misses = [];
     for (const tag of tags) {
-      const canvas = renderTag(tag, cond);
+      const canvas = cond.context ? renderTagInContext(tag, cond) : renderTag(tag, cond);
       const forOcr = conditionForOcr(canvas, pipe.mode);
       const { data } = await worker.recognize(forOcr.toBuffer('image/png'), {}, { blocks: true, text: true });
 
@@ -132,9 +144,9 @@ async function runPipeline(name) {
       // scan first, the full alignment only for a search that found nothing.
       const query = { raw: tag, norm: normalize(tag), exact: false, fuzzy: false,
                       allowIndels: pipe.allowIndels !== false };
-      const hits = findWindowMatches(items, query, {
-        maxWindow: MAX_WINDOW, gapFactor: JOIN_GAP_FACTOR, join: ' ',
-      });
+      const hits = findWindowMatches(
+        pipe.ignoreConfidence ? items.map(({ conf, ...rest }) => rest) : items,
+        query, { maxWindow: MAX_WINDOW, gapFactor: JOIN_GAP_FACTOR, join: ' ' });
       if (hits.length) found++; else misses.push({ tag, read });
     }
     rows.push({ cond: cond.name, found, exact, n: tags.length, misses });

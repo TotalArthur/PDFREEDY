@@ -30,8 +30,44 @@ function levenshtein(a, b) {
   return prev[bl];
 }
 
+/*
+ * Per-character confidence, aligned to normalize()'s output.
+ *
+ * The matcher works on the normalized string, so anything it is told about a
+ * character has to be indexed the same way. Callers that only know one
+ * confidence for a whole word (which is all Tesseract reports by default) use
+ * this to spread it across the characters the word contributes.
+ *
+ * `conf` runs 0..1, where 0 means "OCR could not read this at all".
+ */
+function uniformConfidence(str, conf) {
+  return new Float64Array(normalize(str).length).fill(conf);
+}
+
+/*
+ * Map a span of the NORMALIZED string back onto the raw text it came from.
+ *
+ * The matcher works on the normalized string and reports where it landed there,
+ * because a confusion match leaves no substring to go looking for afterwards.
+ * Two things need the raw position back: highlighting the match for display,
+ * and checking whether it sits in its own delimited field.
+ */
+function rawSpan(text, pos, len) {
+  if (typeof pos !== 'number' || !len) return null;
+  let start = -1, end = -1, kept = 0;
+  for (let i = 0; i < text.length; i++) {
+    // Must mirror normalize() exactly: it keeps A-Z0-9 and drops all else.
+    if (!/[A-Za-z0-9]/.test(text[i])) continue;
+    if (kept === pos) start = i;
+    if (kept === pos + len - 1) { end = i + 1; break; }
+    kept++;
+  }
+  if (start === -1) return null;
+  return { start, end: end === -1 ? text.length : end };
+}
+
 function escapeHtml(s) {
   return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-export { normalize, clamp, levenshtein, escapeHtml };
+export { normalize, clamp, levenshtein, uniformConfidence, rawSpan, escapeHtml };

@@ -87,3 +87,73 @@ export function renderTag(text, { name = '', height = 28, blur = 0, noise = 0, p
   }
   return out;
 }
+
+/*
+ * A tag inside a line number, with the tag field degraded harder than what
+ * surrounds it.
+ *
+ * This is the shape of the failure that started this work: a sheet reading
+ * 18-6-MC-58134-1C3B1 where the middle field came back as "B81 34" at 0%
+ * confidence while everything either side read cleanly at 90%+. The rest of the
+ * corpus renders tags in isolation, so it cannot see that case at all — every
+ * character is degraded equally and there is never any confident context for a
+ * doubtful read to be judged against.
+ */
+export function renderTagInContext(tag, {
+  name = '', prefix = '18-6-MC-', suffix = '-1C3B1',
+  height = 14, blur = 0.3, noise = 8, pad = 16,
+  fieldBlur = 1.1, fieldNoise = 40, uneven = 0,
+} = {}) {
+  const rand = mulberry32(seedFrom(tag + '|ctx|' + name + '|' + height + '|' + fieldBlur));
+  const font = `${height}px sans-serif`;
+  const probe = createCanvas(8, 8).getContext('2d');
+  probe.font = font;
+  const full = prefix + tag + suffix;
+  const w = Math.ceil(probe.measureText(full).width) + pad * 2;
+  const h = Math.ceil(height * 2) + pad;
+  const x0 = pad + probe.measureText(prefix).width;
+  const x1 = x0 + probe.measureText(tag).width;
+
+  const sharp = createCanvas(w, h);
+  const sc = sharp.getContext('2d');
+  sc.fillStyle = '#fff'; sc.fillRect(0, 0, w, h);
+  sc.fillStyle = '#000';
+  sc.font = font;
+  sc.fillText(full, pad, height + pad / 2);
+
+  // Everything gets the light degradation the sheet as a whole suffered.
+  const base = createCanvas(w, h);
+  const bc = base.getContext('2d');
+  bc.fillStyle = '#fff'; bc.fillRect(0, 0, w, h);
+  if (blur > 0) bc.filter = `blur(${blur}px)`;
+  bc.drawImage(sharp, 0, 0);
+  bc.filter = 'none';
+
+  // The tag field alone gets the smudge, drawn back over the top.
+  const fx0 = Math.max(0, Math.floor(x0 - 3)), fx1 = Math.min(w, Math.ceil(x1 + 3));
+  const fw = fx1 - fx0;
+  if (fw > 0 && fieldBlur > 0) {
+    const field = createCanvas(fw, h);
+    const fc = field.getContext('2d');
+    fc.fillStyle = '#fff'; fc.fillRect(0, 0, fw, h);
+    fc.filter = `blur(${fieldBlur}px)`;
+    fc.drawImage(sharp, -fx0, 0);
+    bc.drawImage(field, fx0, 0);
+  }
+
+  // Grain: light across the sheet, heavy over the field.
+  const ctx = base.getContext('2d');
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const amount = (x >= fx0 && x < fx1) ? fieldNoise : noise;
+      if (!amount) continue;
+      const i = (y * w + x) * 4;
+      const v = Math.max(0, Math.min(255, d[i] + (rand() - 0.5) * amount));
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return base;
+}

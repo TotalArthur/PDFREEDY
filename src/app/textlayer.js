@@ -111,7 +111,10 @@ function searchTextLayer(pageNum, query) {
         itemIndices: hit.items.map(it => it.key), confidence: null,
         fuzzy: hit.match.fuzzy, confused: hit.match.confused,
         matchPos: hit.match.pos, matchLen: hit.match.len,
-        cost: hit.match.cost, subs: hit.match.subs, indels: hit.match.indels
+        cost: hit.match.cost, subs: hit.match.subs, indels: hit.match.indels,
+        unknowns: hit.match.unknowns,
+        contextChars: hit.contextChars, contextConf: hit.contextConf,
+        matchConf: hit.matchConf, delimited: hit.delimited
       });
     }
   }
