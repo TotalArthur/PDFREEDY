@@ -7,13 +7,15 @@
  *
  *   node tests/matching.test.js
  */
-import { normalize, levenshtein } from '../src/lib/text.js';
+import { normalize, uniformConfidence } from '../src/lib/text.js';
 import { charsConfusable, confusableIndexOf } from '../src/lib/confusion.js';
 import { matchWindow } from '../src/lib/matching.js';
+import { findWindowMatches } from '../src/lib/windows.js';
+import { scoreResult } from '../src/lib/evidence.js';
 import { mapBoxBack, readingAxis, boundsOfPoints } from '../src/lib/geometry.js';
 
 const M = { normalize, charsConfusable, confusableIndexOf, matchWindow,
-            levenshtein, mapBoxBack, readingAxis, boundsOfPoints };
+            uniformConfidence, mapBoxBack, readingAxis, boundsOfPoints };
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -76,6 +78,80 @@ for (const [read, tag, want, why] of dropped) {
   const m = M.matchWindow(M.normalize(read), Q(tag));
   check(`${read} ~ ${tag} (${why})`, !!m === want);
   console.log(`  ${(!!m === want) ? 'ok  ' : 'BAD '} ${read.padEnd(18)} vs ${tag.padEnd(20)} -> ${m ? `match (cost ${m.cost.toFixed(2)}, ${m.subs} subs, ${m.indels} indel)` : 'no match'}`);
+}
+
+// ---------------------------------------------------------------------------
+section('Confidence: "I could not read this" is not evidence against a match');
+// From a real sheet. The user searched 58134; the drawing says
+// 18-6-MC-58134-1C3B1. Three results came back, all in the same tier, sorted by
+// page number, and the only thing that distinguished the right one was the user
+// having already typed the correction in by hand.
+//
+// What separates them is not what the characters look like — it is that OCR
+// SAID it could not read the one that differs. A glyph reported at 0% is an
+// unknown; a glyph reported at 87% is a confident disagreement. Those are not
+// the same claim and must not cost the same.
+const screenshot = [
+  // [ what OCR read, its confidence, should 58134 match it, why ]
+  ['B81 34',               0,  true,  'the real tag: 4 of 5 exact, the 5th unreadable'],
+  ['18-6-MC-B81 34-1C3B1', 0,  true,  'the same read, with its context — context must not disqualify it'],
+  ['58116',                87, false, 'a confident read that genuinely disagrees'],
+  ['18-12-',               0,  false, 'unreadable, but nothing like the tag either'],
+];
+for (const [read, conf, want, why] of screenshot) {
+  const m = M.matchWindow(M.normalize(read), Q('58134'), { conf: M.uniformConfidence(read, conf / 100) });
+  check(`${read} @ ${conf}% ~ 58134 (${why})`, !!m === want);
+  console.log(`  ${(!!m === want) ? 'ok  ' : 'BAD '} ${read.padEnd(22)} @ ${String(conf).padStart(3)}%  -> ${m ? `match (cost ${m.cost.toFixed(2)}, ${m.unknowns || 0} unreadable)` : 'no match'}`);
+}
+check('a confident read is not rescued by lowering the bar elsewhere',
+  !M.matchWindow(M.normalize('58116'), Q('58134'), { conf: M.uniformConfidence('58116', 0.87) }));
+
+// ---------------------------------------------------------------------------
+section('The whole screenshot, end to end: right answer must come first');
+// The sheet as OCR actually read it. Three candidate lines, one of them the
+// real 18-6-MC-58134-1C3B1 with its middle field unreadable.
+{
+  const LINES = [
+    // [ [word, confidence%], ... ]  laid out left to right, 20px tall
+    [['18-6-MC-', 94], ['B81', 0], ['34', 0], ['-1C3B1', 91]],
+    [['58116', 87]],
+    [['18-12-', 0]],
+  ];
+  const layout = (line) => {
+    let x = 0;
+    return line.map(([text, conf], i) => {
+      const w = text.length * 10;
+      const item = { key: i, text, conf: conf / 100, rs: x, re: x + w, rh: 20 };
+      x += w + 4;   // tight spacing: these words belong to one another
+      return item;
+    });
+  };
+
+  const query = { norm: M.normalize('58134'), exact: false, fuzzy: false, allowIndels: false };
+  const hits = [];
+  for (const line of LINES) {
+    for (const h of findWindowMatches(layout(line), query, { maxWindow: 6, gapFactor: 2.2, join: ' ' })) {
+      const res = { source: 'ocr', text: h.text, matchLen: h.match.len, subs: h.match.subs,
+                    unknowns: h.match.unknowns, indels: h.match.indels, cost: h.match.cost,
+                    contextChars: h.contextChars, contextConf: h.contextConf,
+                    matchConf: h.matchConf, delimited: h.delimited };
+      hits.push({ ...res, ...scoreResult(res) });
+    }
+  }
+  hits.sort((a, b) => b.score - a.score);
+
+  check('the real tag is found', hits.length >= 1 && hits[0].text.replace(/\s/g, '') === 'B8134');
+  check('and it is the only thing found — the two wrong answers do not match at all',
+        hits.length === 1);
+  console.log(`  found ${hits.length} candidate(s):`);
+  for (const h of hits) {
+    console.log(`    "${h.text}"  score ${h.score.toFixed(2)}`);
+    for (const r of h.reasons) console.log(`      - ${r}`);
+  }
+  check('and it can say why: it names the unreadable character',
+        hits[0] && hits[0].reasons.some(r => /could not make it out/.test(r)));
+  check('and it names the corroborating context',
+        hits[0] && hits[0].reasons.some(r => /Surrounded by \d+ characters/.test(r)));
 }
 
 section('Confusion matching: precision guards');

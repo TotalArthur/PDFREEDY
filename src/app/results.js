@@ -58,23 +58,36 @@ function buildResultElement(res, i) {
   textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
   meta.appendChild(textEl);
 
-  if (res.source === 'ocr') {
-    if (res.corrected) {
-      const rawEl = document.createElement('div');
-      rawEl.className = 'result-raw';
-      rawEl.textContent = 'OCR read: ' + res.rawText;
-      meta.appendChild(rawEl);
+  if (res.source === 'ocr' && res.corrected) {
+    const rawEl = document.createElement('div');
+    rawEl.className = 'result-raw';
+    rawEl.textContent = 'OCR read: ' + res.rawText;
+    meta.appendChild(rawEl);
+  }
+
+  // Why this one. The tool can now tell a corroborated find from a coincidence
+  // — saying so out loud is what lets a reader check its reasoning instead of
+  // taking its word for it, which is the whole difference between three
+  // identical-looking guesses and an answer.
+  if (res.reasons && res.reasons.length) {
+    const why = document.createElement('ul');
+    why.className = 'result-why';
+    for (const line of res.reasons) {
+      const li = document.createElement('li');
+      li.textContent = line;
+      why.appendChild(li);
     }
+    meta.appendChild(why);
+  }
+
+  if (res.source === 'ocr') {
     const conf = document.createElement('div');
     conf.className = 'result-conf';
-    conf.textContent = res.corrected
-      ? 'Confirmed by you (OCR read it at ' + Math.round(res.confidence) + '%)'
-      : 'OCR confidence: ' + Math.round(res.confidence) + '% — low confidence doesn’t mean wrong; check the crop';
+    conf.textContent = 'OCR was ' + Math.round(res.confidence) + '% sure of this read overall.';
     meta.appendChild(conf);
   }
 
   el.appendChild(meta);
-  el.addEventListener('click', () => jumpToResult(i));
   el.addEventListener('click', () => jumpToResult(i));
   return el;
 }
@@ -90,7 +103,8 @@ const confidenceOf = res => (res.source === 'ocr' ? res.confidence : 100);
  * and it goes above the run of text that merely contains it. Fuzzy hits sink
  * below everything else in their band and are ordered by how confidently the
  * text they matched was read — a last-resort match on a crisp word is worth
- * looking at before one on a smudge. Everything else stays in page order.
+ * looking at before one on a smudge. Anything still tied falls back to the
+ * evidence score the search ranked on, and then to page order.
  */
 function compareResults(a, b) {
   if (!!a.whole !== !!b.whole) return a.whole ? -1 : 1;
@@ -99,6 +113,8 @@ function compareResults(a, b) {
     const byConf = confidenceOf(b) - confidenceOf(a);
     if (byConf) return byConf;
   }
+  const byScore = (b.score || 0) - (a.score || 0);
+  if (byScore) return byScore;
   return a.page - b.page;
 }
 

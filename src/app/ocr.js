@@ -120,7 +120,12 @@ function searchOcr(pageNum, query) {
     if (line.rotation !== 0 && !rotatedTextToggle.checked) continue;
     // rs/re/rh are already on each word from readingAxis(), so vertical and
     // upside-down passes join and order exactly like horizontal ones.
-    const items = line.words.map((w, i) => ({ key: i, text: w.text, rs: w.rs, re: w.re, rh: w.rh, word: w }));
+    // conf is what Tesseract reported for the word, 0..1. A word it read at 0%
+    // is an admission, not an assertion, and the matcher prices it that way.
+    const items = line.words.map((w, i) => ({
+      key: i, text: w.text, rs: w.rs, re: w.re, rh: w.rh,
+      conf: Math.max(0, Math.min(1, (w.confidence || 0) / 100)), word: w,
+    }));
 
     for (const hit of findWindowMatches(items, query, {
       maxWindow: MAX_WINDOW, gapFactor: JOIN_GAP_FACTOR, join: ' ',
@@ -137,7 +142,10 @@ function searchOcr(pageNum, query) {
         whole: hit.match.whole,
         fuzzy: hit.match.fuzzy, confused: hit.match.confused,
         matchPos: hit.match.pos, matchLen: hit.match.len,
-        cost: hit.match.cost, subs: hit.match.subs, indels: hit.match.indels
+        cost: hit.match.cost, subs: hit.match.subs, indels: hit.match.indels,
+        unknowns: hit.match.unknowns,
+        contextChars: hit.contextChars, contextConf: hit.contextConf,
+        matchConf: hit.matchConf, delimited: hit.delimited
       });
     }
   }

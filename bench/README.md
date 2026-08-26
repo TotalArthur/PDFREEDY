@@ -41,43 +41,89 @@ pipelines see pixel-identical input.
 
 ## Results
 
-`node bench/eval.mjs`, 12 tags x 11 degradation conditions (132 samples per
+`node bench/eval.mjs`, 12 tags x 15 degradation conditions (180 samples per
 pipeline), counting how often a user typing the tag would find it:
 
-| condition | as shipped | dicts off | never condition | always flatten | conditioning only | **current** |
-|---|---|---|---|---|---|---|
-| clean-28px  | 12/12 | 12/12 | 12/12 |  10/12 | 12/12 | 12/12 |
-| soft-28px   | 12/12 | 12/12 | 12/12 |  12/12 | 12/12 | 12/12 |
-| small-14px  | 11/12 | 12/12 | 12/12 |  12/12 | 11/12 | 12/12 |
-| soft-14px   | 12/12 | 12/12 | 12/12 |  12/12 | 11/12 | 12/12 |
-| noisy-14px  | 10/12 | 10/12 | 12/12 |  12/12 | 11/12 | 12/12 |
-| bad-11px    |  3/12 |  4/12 |  9/12 |  11/12 |  6/12 |  9/12 |
-| worse-11px  |  0/12 |  0/12 |  0/12 |   0/12 |  0/12 |  0/12 |
-| awful-9px   |  0/12 |  0/12 |  0/12 |   0/12 |  0/12 |  0/12 |
-| lit-28px    | 12/12 | 12/12 |  0/12 |  12/12 | 11/12 | 12/12 |
-| lit-14px    | 11/12 | 12/12 |  0/12 |  12/12 | 11/12 | 12/12 |
-| lit-soft-14 |  5/12 |  5/12 |  0/12 |  12/12 | 12/12 | 12/12 |
-| **overall** | **67%** | 69% | 52% | 80% | 73% | **80%** |
+| condition | as shipped | dicts off | never condition | always flatten | ignore confidence | no indels | **current** |
+|---|---|---|---|---|---|---|---|
+| clean-28px  | 12/12 | 12/12 | 12/12 | 11/12 | 12/12 | 12/12 | 12/12 |
+| soft-28px   | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 |
+| small-14px  | 11/12 | 12/12 | 12/12 | 12/12 | 12/12 | 11/12 | 12/12 |
+| soft-14px   | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 11/12 | 12/12 |
+| noisy-14px  | 10/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 | 12/12 |
+| bad-11px    |  3/12 |  6/12 |  9/12 | 11/12 |  9/12 |  6/12 |  9/12 |
+| worse-11px  |  0/12 |  0/12 |  0/12 |  0/12 |  0/12 |  0/12 |  0/12 |
+| awful-9px   |  0/12 |  0/12 |  0/12 |  0/12 |  0/12 |  0/12 |  0/12 |
+| lit-28px    | 12/12 | 12/12 |  0/12 | 12/12 | 12/12 | 11/12 | 12/12 |
+| lit-14px    | 11/12 | 12/12 |  0/12 | 12/12 | 12/12 | 11/12 | 12/12 |
+| lit-soft-14 |  5/12 | 10/12 |  0/12 | 12/12 | 12/12 | 12/12 | 12/12 |
+| field-14    |  4/12 | 10/12 | 10/12 | 12/12 | 10/12 | 10/12 | 10/12 |
+| field-soft-14 | 0/12 | 0/12 |  0/12 |  0/12 |  0/12 |  0/12 |  0/12 |
+| field-11    |  0/12 |  3/12 |  9/12 |  9/12 |  6/12 |  9/12 |  9/12 |
+| field-junk-16 | 2/12 | 3/12 |  6/12 |  7/12 |  4/12 |  5/12 |  6/12 |
+| **overall** | **52%** | 64% | 52% | *74%* | 69% | 68% | **72%** |
 
-**67% → 80%**, split roughly evenly between the two changes: conditioning
-accounts for 67→73 (matching held constant), and letting the matcher absorb
-erased characters accounts for 73→80.
+**52% → 72%.** The contributions, each measured by holding everything else fixed:
 
-### What each column is
+- conditioning chosen from the image, rather than binarizing everything: the bulk
+- letting the matcher absorb characters that blur erased: 68% → 72%
+- pricing a substitution by how sure OCR was: 69% → 72%
 
-- **as shipped** — always binarize, dictionary flags that never took effect,
-  substitution-only matching.
-- **dicts off** — the dictionary fix alone. Worth about two points, and within
-  the corpus's noise; the reason to do it is that the code claimed to be doing
-  it and wasn't.
-- **never condition** — greyscale straight to Tesseract. Best of all on evenly
-  lit pages and catastrophic on unevenly lit ones (0/12, three times over).
-- **always flatten** — ties the current default overall, and is worse on clean
-  pages (10/12 vs 12/12).
-- **conditioning only** — the current conditioning with the old substitution-only
-  matching, to separate the two contributions.
-- **current** — conditioning chosen from the image, dictionaries off, erased
-  characters allowed.
+### On the `field-*` conditions
+
+These render a tag *inside a line number* — `18-6-MC-<tag>-1C3B1` — and smudge
+only the tag's field, leaving everything either side legible. They exist because
+of a real sheet where the tool returned the correct tag and two wrong ones,
+all in the same tier, in page order, with nothing to tell them apart.
+
+Adding them mattered more than expected. Every other condition here degrades the
+whole string equally, so there is never any confident context for a doubtful read
+to be judged against — and against that corpus, confidence-aware matching measured
+as doing **nothing at all** (80% either way). The change is worth +3 points only
+once the corpus contains a shape where some characters read well and others don't,
+which is the shape almost all real drawings have.
+
+Calibrating them took a sweep. Too gentle and OCR reads the tag perfectly, which
+tests nothing; too harsh and it returns empty, which no matcher can fix. The
+interesting band is narrow and is where the real sheet sat.
+
+### One honest loose end
+
+**Always flattening scores 74% against the current 72%**, winning on four of the
+six hardest conditions and losing one tag on a pristine render. Two tags out of
+180 is not much, but it has repeated across runs, so it is signal rather than
+noise.
+
+The likely mechanism is that flattening does two things — it removes an
+illumination gradient *and* it boosts local contrast — and only the first is what
+the current rule tests for. The right next experiment is to make the rule fire on
+low contrast as well, which should collect flattening's gains without its cost on
+clean pages, rather than flipping the default on a two-tag margin.
+
+The default stays as it is for now: never make a clean page worse. That is a
+judgement, not a measurement, and the measurement mildly disagrees with it.
+
+### What is still missed
+
+Almost entirely the two worst conditions, where recognition returns nothing
+recoverable:
+
+```
+worse-11px   want PT-11004    read "P"
+worse-11px   want PSV-2201B   read ""
+worse-11px   want XV-3308     read ""
+```
+
+No amount of matching fixes a read with no signal in it. Those need the page
+rendered so the glyphs land at a size the engine can work with — the next piece
+of work, and what `field-soft-14` (0/12 for every pipeline) is holding a place for.
+
+`field-junk-16` is a different and more interesting failure: OCR marks the
+character it cannot read with a junk symbol, so `18-6-MC-58134-1C3B1` comes back
+as `18-6-MC-5#134-1C3B1`. `normalize()` then **deletes** the `#`, which turns a
+character that is *wrong* into a character that is *missing* — throwing away the
+one piece of information that says something was there at all. Preserving those
+marks as unknown characters, rather than dropping them, is the obvious next win.
 
 ### Three findings, all of which changed the code
 
