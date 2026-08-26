@@ -24,6 +24,16 @@ The second is the one that counts. A garbled read still counts as found if the
 matcher bridges the garble, which is the entire point of the confusion tier;
 measuring OCR string accuracy alone would be measuring the wrong thing.
 
+## Pipelines worth comparing
+
+`--pipeline=strip` is the current pipeline plus line-art removal (the fix for
+text inside instrument bubbles). It scores identically to `current` on all
+fifteen conditions, which is the point: the corpus is bare degraded text, so
+this measures that the stripper takes nothing it shouldn't. What it *gains* is
+not measurable here — it needs line art to remove — and is covered by
+`tests/lineart.test.js` and the six-bubble sheet in `tests/e2e.test.mjs`, which
+reports 0 of 6 occurrences without it and 6 of 6 with it.
+
 ## Caveat
 
 Synthetic tags are not a labelled set of real sheets, and this is not a

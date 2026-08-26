@@ -201,7 +201,38 @@ Per page, on load:
    and the status line says *done, ready to search* when there is nothing left to wait
    for.
 
-### Before OCR runs: conditioning, but only where it helps
+### Before OCR runs: the drawing's own lines come off
+
+A P&ID says what an instrument is by drawing a **circle** around its tag. That
+circle used to cost the tool every tag inside it. Not "read badly" — Tesseract
+returns *no words at all* for text enclosed by a curve:
+
+| the same eight tags, one sheet | tags read |
+|---|---|
+| no enclosure | 8 / 8 |
+| in a rectangle | 8 / 8 |
+| in an instrument bubble | **0 / 8** |
+| in an open arc | **0 / 8** |
+
+Nothing downstream can recover from that: confusion matching needs a read to
+work on, and there is none. It is why a tag stamped on a sheet eight times came
+back with a single match — the one occurrence that happened to sit in a box.
+
+No Tesseract parameter fixes it (`edges_max_children_per_outline`,
+`textord_heavy_nr`, every page-segmentation mode — all still zero), so the
+curve is removed before the engine ever sees it. Each connected run of ink is
+measured, and erased only if it is **both** far bigger than the characters on
+that sheet **and** too hollow to be one — a 200px ring encloses mostly paper, a
+character does not. Character height is measured from the sheet itself, since a
+glyph at OCR_SCALE on an A1 sheet is nothing like one on a letter-size page.
+
+Nothing character-sized is ever touched, whichever shape it is, which is what
+keeps a hyphen, a bracket or an `I` safe. Costs about 2.8s on a 50-megapixel
+sheet, against minutes of OCR. On the bench corpus of degraded text with no
+line art, all fifteen conditions score **identically** to before — it removes
+what it should and nothing else.
+
+### Conditioning: only where it helps
 
 This used to say that every page was adaptively binarized before OCR, and explain at
 length why that was right. Measuring it (`bench/eval.mjs`) showed it was costing recall on

@@ -1184,6 +1184,126 @@
     return { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY };
   }
 
+  // src/lib/lineart.js
+  var SIZE_FACTOR = 3.5;
+  var MAX_FILL = 0.34;
+  var THIN_ASPECT = 8;
+  var MIN_GLYPH_PIXELS = 12;
+  var MAX_INK_SHARE = 0.35;
+  function inkMask(grey, n) {
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < n; i++) hist[grey[i]]++;
+    let total = 0;
+    for (let v = 0; v < 256; v++) total += hist[v] * v;
+    let sumB = 0, wB = 0, best = 0, cut = 128;
+    for (let v = 0; v < 256; v++) {
+      wB += hist[v];
+      if (!wB) continue;
+      const wF = n - wB;
+      if (!wF) break;
+      sumB += v * hist[v];
+      const mB = sumB / wB, mF = (total - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > best) {
+        best = between;
+        cut = v;
+      }
+    }
+    const mask = new Uint8Array(n);
+    let ink = 0;
+    for (let i = 0; i < n; i++) if (grey[i] <= cut) {
+      mask[i] = 1;
+      ink++;
+    }
+    return { mask, ink };
+  }
+  function eachComponent(mask, w, h, visit) {
+    const n = w * h;
+    let stack = new Int32Array(1024);
+    let pixels = new Int32Array(1024);
+    for (let seed = 0; seed < n; seed++) {
+      if (mask[seed] !== 1) continue;
+      let sp = 0, count = 0;
+      stack[sp++] = seed;
+      mask[seed] = 2;
+      let minX = w, minY = h, maxX = -1, maxY = -1;
+      while (sp > 0) {
+        const i = stack[--sp];
+        const x = i % w, y = (i - x) / w;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if (count === pixels.length) {
+          const grown = new Int32Array(pixels.length * 2);
+          grown.set(pixels);
+          pixels = grown;
+        }
+        pixels[count++] = i;
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= h) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= w) continue;
+            const j = ny * w + nx;
+            if (mask[j] !== 1) continue;
+            mask[j] = 2;
+            if (sp === stack.length) {
+              const grown = new Int32Array(stack.length * 2);
+              grown.set(stack);
+              stack = grown;
+            }
+            stack[sp++] = j;
+          }
+        }
+      }
+      visit({ minX, minY, maxX, maxY, count, pixels });
+    }
+  }
+  function medianGlyphHeight(heights) {
+    if (!heights.length) return 0;
+    heights.sort((a, b) => a - b);
+    return heights[heights.length >> 1];
+  }
+  function isLineArt(c, glyphHeight) {
+    const w = c.maxX - c.minX + 1, h = c.maxY - c.minY + 1;
+    const long = Math.max(w, h), short = Math.min(w, h);
+    if (long <= SIZE_FACTOR * glyphHeight) return false;
+    if (long >= THIN_ASPECT * short) return true;
+    return c.count / (w * h) <= MAX_FILL;
+  }
+  function stripLineArtPlane(grey, px, w, h) {
+    const n = w * h;
+    const { mask, ink } = inkMask(grey, n);
+    if (!ink || ink > n * MAX_INK_SHARE) return 0;
+    const heights = [];
+    const boxes = [];
+    eachComponent(mask, w, h, (c) => {
+      boxes.push({ minX: c.minX, minY: c.minY, maxX: c.maxX, maxY: c.maxY, count: c.count });
+      if (c.count >= MIN_GLYPH_PIXELS) heights.push(c.maxY - c.minY + 1);
+    });
+    const glyphHeight = medianGlyphHeight(heights);
+    if (!glyphHeight) return 0;
+    const doomed = /* @__PURE__ */ new Set();
+    for (let i = 0; i < boxes.length; i++) if (isLineArt(boxes[i], glyphHeight)) doomed.add(i);
+    if (!doomed.size) return 0;
+    const { mask: mask2 } = inkMask(grey, n);
+    let idx = 0;
+    eachComponent(mask2, w, h, (c) => {
+      if (doomed.has(idx++)) {
+        for (let k = 0; k < c.count; k++) {
+          const i = c.pixels[k];
+          grey[i] = 255;
+          const j = i * 4;
+          px[j] = px[j + 1] = px[j + 2] = 255;
+          px[j + 3] = 255;
+        }
+      }
+    });
+    return doomed.size;
+  }
+
   // src/lib/preprocess.js
   var makeCanvas = () => document.createElement("canvas");
   function illuminationSpread(grey, w, h) {
@@ -1313,6 +1433,18 @@
       return out < 0 ? 0 : out > 255 ? 255 : out;
     });
   }
+  function stripLineArt(srcCanvas) {
+    const plane = greyPlane(srcCanvas);
+    if (!plane) return srcCanvas;
+    const { data: grey, w, h, img } = plane;
+    const removed = stripLineArtPlane(grey, img.data, w, h);
+    if (!removed) return srcCanvas;
+    const out = makeCanvas();
+    out.width = w;
+    out.height = h;
+    out.getContext("2d").putImageData(img, 0, 0);
+    return out;
+  }
   function conditionForOcr(srcCanvas, mode = "auto") {
     if (mode === "off") return srcCanvas;
     if (mode === "binarize") return preprocessForOcr(srcCanvas);
@@ -1347,7 +1479,7 @@
     await page.render({ canvasContext: baseCtx, viewport }).promise;
     data.thumbCanvas = base;
     data.thumbScale = OCR_SCALE;
-    const ocrBase = conditionForOcr(base);
+    const ocrBase = stripLineArt(conditionForOcr(base));
     const W = base.width, H = base.height;
     const allWords = [];
     const completed = [];

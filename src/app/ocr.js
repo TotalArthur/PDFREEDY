@@ -1,6 +1,6 @@
 import { S } from './state.js';
 import { findWindowMatches } from '../lib/windows.js';
-import { conditionForOcr, rotateCanvas } from '../lib/preprocess.js';
+import { conditionForOcr, rotateCanvas, stripLineArt } from '../lib/preprocess.js';
 import { mapBoxBack, readingAxis, boundsOfPoints } from '../lib/geometry.js';
 import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS, TESSERACT_INIT, tesseractParams } from './config.js';
 import { getPageProxy } from './pdf.js';
@@ -55,7 +55,11 @@ async function runOcrForPage(pageNum, onProgress) {
   // Conditioning is chosen from the image, not applied blindly. A crisp vector
   // render thresholds well; a soft scan does not, and thresholding it destroys
   // the very strokes OCR needs. See bench/README.md.
-  const ocrBase = conditionForOcr(base);
+  // Then the drawing's own strokes come off. A P&ID rings every instrument tag
+  // with a circle, and Tesseract returns NOTHING for text inside one — see
+  // lineart.js. Done once here rather than per rotation, since the strokes are
+  // the same whichever way up the page is read.
+  const ocrBase = stripLineArt(conditionForOcr(base));
 
   const W = base.width, H = base.height;
   const allWords = [];   // flattened, coordinates already mapped back to C0 space

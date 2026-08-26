@@ -209,9 +209,27 @@ check('clicking a result jumps to its page',
 if (process.env.SKIP_OCR) {
   console.log('  skip OCR path (SKIP_OCR set)');
 } else {
+  // The tag sits inside an instrument bubble, because that is how a P&ID draws
+  // one — and because text inside a circle used to be invisible to OCR outright
+  // (src/lib/lineart.js), which is how a tag stamped on a sheet eight times came
+  // back with a single match.
+  // Six instrument bubbles, all carrying the same tag — the shape of a real
+  // sheet, and the case that was broken: text inside a circle was invisible to
+  // OCR outright (src/lib/lineart.js), so a tag stamped on the drawing six
+  // times came back with at most the one occurrence that wasn't in a bubble.
   const ocrPath = path.join(dir, 'ocr.pdf');
-  writeFileSync(ocrPath, makePdf([[{ text: 'PT-9042', x: 20, y: 60, size: 24 }]],
-    { width: 260, height: 120 }));
+  const bubbles = [];
+  ['SDZIO', 'SDZIC', 'SDVSV', 'SDZSO', 'SDZSC', 'LAHH'].forEach((label, i) => {
+    const cx = 90 + (i % 3) * 170, cy = 300 - Math.floor(i / 3) * 170;
+    bubbles.push(
+      { circle: { x: cx, y: cy, r: 46, width: 2 } },
+      { text: label, x: cx - 26, y: cy + 6, size: 15 },
+      { text: 'PT-9042', x: cx - 34, y: cy - 22, size: 15 });
+  });
+  // A raster behind the drawing, so the page is routed to OCR the way a scanned
+  // sheet is rather than being served from its text layer.
+  bubbles.unshift({ image: { x: 0, y: 0, w: 560, h: 420 } });
+  writeFileSync(ocrPath, makePdf([bubbles], { width: 560, height: 420 }));
   await page.setInputFiles('#fileInput', ocrPath);
   // OCR is slow enough to observe the reading state itself: the drawing is
   // covered and the search box is shut while the page is being read.
@@ -237,6 +255,11 @@ if (process.env.SKIP_OCR) {
   check('OCR-read tag is found', r.length >= 1, JSON.stringify(r));
   check('an OCR row is present, not only the text-layer row',
     r.some(x => x.badges.includes('OCR')), JSON.stringify(r.map(x => x.badges)));
+  // The bug this fixture exists for: every bubble carries the tag, so every
+  // bubble must report it. One row means the circles ate the rest.
+  const ocrRows = r.filter(x => x.badges.includes('OCR'));
+  check('a tag inside an instrument bubble is read, and every occurrence is reported',
+    ocrRows.length >= 5, ocrRows.length + ' of 6 bubbles reported');
 
   // ---- asking for rotated text after the fact ---------------------------
   // Ticking the box mid-document has to put the page back to work rather than
