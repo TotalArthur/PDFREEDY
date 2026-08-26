@@ -22,7 +22,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import { createWorker, PSM, OEM } from 'tesseract.js';
 import { normalize } from '../src/lib/text.js';
 import { findWindowMatches } from '../src/lib/windows.js';
-import { conditionForOcr, setCanvasFactory } from '../src/lib/preprocess.js';
+import { conditionForOcr, stripLineArt, setCanvasFactory } from '../src/lib/preprocess.js';
 import { JOIN_GAP_FACTOR, MAX_WINDOW, TESSERACT_INIT, tesseractParams } from '../src/app/config.js';
 import { TAGS, CONDITIONS } from './corpus.mjs';
 import { renderTag, renderTagInContext } from './render.mjs';
@@ -94,6 +94,19 @@ const PIPELINES = {
     mode: 'auto',
     allowIndels: true,
   },
+  // Text drawn inside a P&ID's instrument bubble is not read badly by
+  // Tesseract, it is not read at all (see src/lib/lineart.js). Removing the
+  // drawing's strokes fixes that outright; what has to be measured is the
+  // price paid on degraded text that has no line art around it, where a blurred
+  // or noisy glyph could in principle be mistaken for a stroke.
+  strip: {
+    label: 'current, plus the drawing lines removed before OCR',
+    init: TESSERACT_INIT,
+    params: BASE_PARAMS,
+    mode: 'auto',
+    strip: true,
+    allowIndels: true,
+  },
 };
 
 const args = process.argv.slice(2);
@@ -133,7 +146,8 @@ async function runPipeline(name) {
     const misses = [];
     for (const tag of tags) {
       const canvas = cond.context ? renderTagInContext(tag, cond) : renderTag(tag, cond);
-      const forOcr = conditionForOcr(canvas, pipe.mode);
+      let forOcr = conditionForOcr(canvas, pipe.mode);
+      if (pipe.strip) forOcr = stripLineArt(forOcr);
       const { data } = await worker.recognize(forOcr.toBuffer('image/png'), {}, { blocks: true, text: true });
 
       const items = wordsToItems(data);

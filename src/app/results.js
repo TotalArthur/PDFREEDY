@@ -8,7 +8,6 @@ import { runFullSearch } from './search.js';
 import { jumpToResult } from './viewer.js';
 import {
   resultsList,
-  exportCsvBtn,
 } from './dom.js';
 
 // =======================================================================
@@ -93,6 +92,32 @@ function buildResultElement(res, i) {
   return el;
 }
 
+// A text-layer hit has no confidence number attached, because there is no
+// engine reading it — treat it as certain rather than as a zero.
+const confidenceOf = res => (res.source === 'ocr' ? res.confidence : 100);
+
+/*
+ * Order within a band.
+ *
+ * Whole-tag hits first: if the string IS the tag, it is the one the user meant,
+ * and it goes above the run of text that merely contains it. Fuzzy hits sink
+ * below everything else in their band and are ordered by how confidently the
+ * text they matched was read — a last-resort match on a crisp word is worth
+ * looking at before one on a smudge. Anything still tied falls back to the
+ * evidence score the search ranked on, and then to page order.
+ */
+function compareResults(a, b) {
+  if (!!a.whole !== !!b.whole) return a.whole ? -1 : 1;
+  if (a.fuzzy !== b.fuzzy) return a.fuzzy ? 1 : -1;
+  if (a.fuzzy && b.fuzzy) {
+    const byConf = confidenceOf(b) - confidenceOf(a);
+    if (byConf) return byConf;
+  }
+  const byScore = (b.score || 0) - (a.score || 0);
+  if (byScore) return byScore;
+  return a.page - b.page;
+}
+
 function renderResultsList() {
   resultsList.innerHTML = '';
   if (!S.lastResults.length) {
@@ -105,10 +130,11 @@ function renderResultsList() {
     return;
   }
 
-  // Group by how sure the match is, rather than listing every hit alike. The
-  // order within a band is still page order, which mergeFreshResults maintains.
+  // Group by how sure the match is, rather than listing every hit alike, then
+  // order within each band by compareResults.
   const grouped = new Map(BANDS.map(b => [b, []]));
   S.lastResults.forEach((res, i) => grouped.get(bandOf(res)).push([res, i]));
+  for (const group of grouped.values()) group.sort((a, b) => compareResults(a[0], b[0]));
   const populated = BANDS.filter(b => grouped.get(b).length);
 
   for (const band of populated) {
@@ -260,33 +286,9 @@ async function buildThumbnail(res, canvasEl) {
   ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
-exportCsvBtn.addEventListener('click', exportCsv);
-function exportCsv() {
-  const rows = [['Page','Source','Confidence','Matched Text','Corrected','Raw OCR Text']];
-  for (const r of S.lastResults) {
-    rows.push([
-      r.page, r.source,
-      r.source==='ocr' ? Math.round(r.confidence)+'%' : '',
-      r.text,
-      r.corrected ? 'yes' : '',
-      r.corrected ? r.rawText : ''
-    ]);
-  }
-  const csv = rows.map(row => row.map(cell => {
-    const s = String(cell ?? '');
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
-  }).join(',')).join('\r\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'pid_tag_matches.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
 export {
   buildThumbnail,
-  exportCsv,
+  compareResults,
   highlightMatch,
   openFixEditor,
   renderResultsList,

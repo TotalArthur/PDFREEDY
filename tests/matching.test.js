@@ -24,7 +24,7 @@ function check(name, cond) {
   console.log('  FAIL  ' + name);
 }
 function section(title) { console.log('\n' + title); }
-const Q = (s, o = {}) => ({ norm: M.normalize(s), exact: !!o.exact, fuzzy: !!o.fuzzy });
+const Q = (s, o = {}) => ({ norm: M.normalize(s), exactOnly: !!o.exact, fuzzy: !!o.fuzzy });
 
 // ---------------------------------------------------------------------------
 section('Confusion matching: garbled OCR reads vs the tag the user types');

@@ -12,7 +12,6 @@ import {
   fuzzyToggle,
   searchSummary,
   resultsCount,
-  exportCsvBtn,
 } from './dom.js';
 
 // =======================================================================
@@ -55,11 +54,20 @@ function rank(results) {
   return results.sort((a, b) => (b.score - a.score) || (a.page - b.page));
 }
 
+/*
+ * The two toggles are tiers to include, not modes to choose between — which is
+ * why both start ticked. "Exact" on its own is the one restrictive case: with
+ * nothing else asked for, it means the tag has to BE the whole string. Ticked
+ * alongside Fuzzy it can't mean that (the two would contradict), so the search
+ * runs every tier and the results list ranks whole-tag exact hits to the top.
+ */
 function runFullSearch() {
   const raw = searchInput.value.trim();
+  const exactOn = exactToggle.checked;
+  const fuzzyOn = fuzzyToggle.checked;
   S.currentQuery = {
     raw, norm: normalize(raw),
-    exact: exactToggle.checked, fuzzy: fuzzyToggle.checked,
+    exactOnly: exactOn && !fuzzyOn, fuzzy: fuzzyOn,
     // First pass allows only substitutions, which is roughly ten times cheaper
     // than the full alignment. See below for when that gets lifted.
     allowIndels: false,
@@ -115,12 +123,21 @@ function updateSearchSummary() {
     const d = S.pageData.get(p);
     if (!['text-done','ocr-done','skipped','error'].includes(d.status)) pagesUnprocessed.push(p);
   }
-  let msg = S.lastResults.length + ' match' + (S.lastResults.length===1?'':'es') + ' found so far';
+  // "so far" is a promise that more may arrive, so only say it while pages are
+  // in fact still being read.
+  let msg = S.lastResults.length + ' match' + (S.lastResults.length===1?'':'es') + ' found'
+          + (pagesUnprocessed.length ? ' so far' : '');
   if (S.deepSearchUsed) msg += ' — nothing matched exactly, so these allow for characters OCR lost entirely. Check the crops.';
   if (pagesUnprocessed.length) msg += ' (' + pagesUnprocessed.length + ' page' + (pagesUnprocessed.length===1?'':'s') + ' still processing — results will keep appearing)';
   searchSummary.textContent = msg;
   resultsCount.textContent = S.lastResults.length + ' result' + (S.lastResults.length===1?'':'s');
-  exportCsvBtn.disabled = S.lastResults.length === 0;
+}
+
+// Searching a half-read document reports absences that aren't real, so the box
+// is closed while pages are still being read and opened once they're all in.
+function setSearchEnabled(enabled) {
+  searchInput.disabled = !enabled;
+  searchBtn.disabled = !enabled;
 }
 
 searchBtn.addEventListener('click', runFullSearch);
@@ -132,5 +149,6 @@ export {
   mergeFreshResults,
   runFullSearch,
   searchPage,
+  setSearchEnabled,
   updateSearchSummary,
 };

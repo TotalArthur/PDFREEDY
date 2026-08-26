@@ -2,7 +2,7 @@ import { S } from './state.js';
 import { clamp } from '../lib/text.js';
 import { itemQuadCanvas, boundsOfPoints } from '../lib/geometry.js';
 import { getPageProxy } from './pdf.js';
-import { updateProcSummary, hidePageProgressBanner } from './queue.js';
+import { updateProcSummary } from './queue.js';
 import { renderResultsList } from './results.js';
 import {
   skipPageBtn,

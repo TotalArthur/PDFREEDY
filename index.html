@@ -143,6 +143,7 @@
     width: 100%; height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin: 6px 0;
   }
   #procBarInner { height: 100%; background: var(--accent); width: 0%; transition: width .4s; }
+  #procBarInner.done { background: var(--good); }
   #procBarInner.processing {
     background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.35) 0 8px, transparent 8px 16px);
     background-size: 28px 28px;
@@ -171,11 +172,6 @@
     padding: 10px 14px 6px; display: flex; justify-content: space-between; align-items: center;
     color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
   }
-  #exportCsvBtn {
-    font-size: 11px; text-transform: none; letter-spacing: 0; background: none; border: 1px solid var(--border);
-    color: var(--text-dim); border-radius: 4px; padding: 3px 8px; cursor: pointer;
-  }
-  #exportCsvBtn:hover { color: var(--text); border-color: var(--accent); }
   #resultsList { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
   .result-item {
     display: flex; gap: 10px; padding: 8px; border-radius: 8px; cursor: pointer;
@@ -302,15 +298,24 @@
   }
   #dropHint { max-width: 420px; line-height: 1.6; }
   #dropHint b { color: var(--text); }
+  .loading-hint { color: var(--text-dim); font-size: 11.5px; }
 
-  #pageProgressBanner {
-    position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
-    background: rgba(20,21,23,.92); border: 1px solid var(--border); border-radius: 8px;
-    padding: 8px 14px; font-size: 12px; color: var(--text-dim); display: none;
-    align-items: center; gap: 8px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.4);
+  /* While the queue is reading the document the drawing is covered: what is on
+     screen has not been searched yet, and it must not look as though it has. */
+  #viewerLoading {
+    position: absolute; inset: 0; z-index: 5; display: none;
+    flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: rgba(20,21,23,.72); backdrop-filter: blur(1.5px);
+    color: var(--text); font-size: 13px; text-align: center; padding: 24px;
   }
-  #pageProgressBanner.visible { display: flex; }
+  #viewerLoading.visible { display: flex; }
+  #viewerLoading .big-spinner {
+    width: 42px; height: 42px; border-radius: 50%;
+    border: 4px solid rgba(79,157,255,.25); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  #viewerLoadingTitle { font-weight: 600; }
+  #viewerLoadingText { color: var(--text-dim); max-width: 340px; line-height: 1.5; }
 
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: #3a3d42; border-radius: 5px; }
@@ -345,8 +350,8 @@
           <button id="searchBtn" disabled>Search</button>
         </div>
         <div class="search-options">
-          <label><input type="checkbox" id="exactToggle"> Exact match</label>
-          <label><input type="checkbox" id="fuzzyToggle"> Fuzzy (last-resort, may over-match)</label>
+          <label title="Whole-tag hits are listed first. On its own (Fuzzy off) it means the tag must be the entire string."><input type="checkbox" id="exactToggle" checked> Exact match (listed first)</label>
+          <label title="A last-resort tier, listed below everything else, best-read first."><input type="checkbox" id="fuzzyToggle" checked> Fuzzy (last-resort, may over-match)</label>
         </div>
         <div id="searchSummary"></div>
       </div>
@@ -364,7 +369,6 @@
       <div id="resultsSection">
         <div id="resultsHeader">
           <span id="resultsCount">Results</span>
-          <button id="exportCsvBtn" disabled>Export CSV</button>
         </div>
         <div id="correctionsBar">
           <span id="correctionsCount"></span>
@@ -404,7 +408,12 @@
           <canvas id="pageCanvas"></canvas>
           <canvas id="overlayCanvas"></canvas>
         </div>
-        <div id="pageProgressBanner"><span id="pageProgressSpinner" class="spinner"></span><span id="pageProgressText"></span></div>
+        <div id="viewerLoading">
+          <div class="big-spinner"></div>
+          <div id="viewerLoadingTitle">Reading the drawing…</div>
+          <div id="viewerLoadingText"></div>
+          <div class="loading-hint">Search opens as soon as every page has been read.</div>
+        </div>
       </div>
     </div>
   </div>
@@ -444,7 +453,6 @@
   var cancelProcBtn = $("cancelProcBtn");
   var resultsCount = $("resultsCount");
   var resultsList = $("resultsList");
-  var exportCsvBtn = $("exportCsvBtn");
   var toolbar = $("toolbar");
   var prevPageBtn = $("prevPageBtn");
   var nextPageBtn = $("nextPageBtn");
@@ -462,9 +470,8 @@
   var overlayCanvas = $("overlayCanvas");
   var rotatedTextToggle = $("rotatedTextToggle");
   var emptyViewer = $("emptyViewer");
-  var pageProgressBanner = $("pageProgressBanner");
-  var pageProgressText = $("pageProgressText");
-  var pageProgressSpinner = $("pageProgressSpinner");
+  var viewerLoading = $("viewerLoading");
+  var viewerLoadingText = $("viewerLoadingText");
   var pageCtx = pageCanvas.getContext("2d");
   var overlayCtx = overlayCanvas.getContext("2d");
 
@@ -492,7 +499,7 @@
     processingCancelled: false,
     skipCurrentPageRequested: false,
     isBackgroundRunning: false,
-    currentQuery: { raw: "", norm: "", exact: false, fuzzy: false },
+    currentQuery: { raw: "", norm: "", exactOnly: false, fuzzy: false },
     tickerHandle: null,
     // Set when a search found nothing on the cheap pass and only turned results
     // up once the matcher was allowed to absorb dropped characters. Those hits
@@ -930,10 +937,13 @@
 
   // src/lib/matching.js
   var FUZZY_CONFIDENCE_CAP = 0.45;
-  function describe(hit, fuzzy) {
+  function describe(hit, fuzzy, normLen) {
     return {
       pos: hit.pos,
       len: hit.len,
+      // The query covered the candidate end to end with nothing left over. The
+      // results list ranks those above a hit buried inside a longer run.
+      whole: hit.pos === 0 && hit.len === normLen,
       confused: hit.cost > 0,
       fuzzy,
       cost: hit.cost,
@@ -956,28 +966,38 @@
     }
     const needle = query._needle;
     const conf = opts && opts.conf || null;
-    if (query.exact) {
+    if (query.exactOnly) {
       if (norm === q) {
-        return { pos: 0, len: norm.length, confused: false, fuzzy: false, cost: 0, subs: 0, unknowns: 0, indels: 0 };
+        return { pos: 0, len: norm.length, whole: true, confused: false, fuzzy: false, cost: 0, subs: 0, unknowns: 0, indels: 0 };
       }
       const hit2 = confusableMatch(norm, needle, { allowIndels: query.allowIndels, conf });
       if (hit2 && hit2.pos === 0 && hit2.len === norm.length) {
-        return { ...describe(hit2, false), pos: 0, len: norm.length };
+        return { ...describe(hit2, false, norm.length), pos: 0, len: norm.length, whole: true };
       }
       return null;
     }
     const exactPos = norm.indexOf(q);
     if (exactPos !== -1) {
-      return { pos: exactPos, len: q.length, confused: false, fuzzy: false, cost: 0, subs: 0, unknowns: 0, indels: 0 };
+      return {
+        pos: exactPos,
+        len: q.length,
+        whole: norm.length === q.length,
+        confused: false,
+        fuzzy: false,
+        cost: 0,
+        subs: 0,
+        unknowns: 0,
+        indels: 0
+      };
     }
     const hit = confusableMatch(norm, needle, { allowIndels: query.allowIndels, conf });
-    if (hit) return describe(hit, false);
+    if (hit) return describe(hit, false, norm.length);
     if (query.fuzzy) {
       const loose = confusableMatch(norm, needle, {
         allowIndels: true,
         conf: capConfidence(conf, norm.length, FUZZY_CONFIDENCE_CAP)
       });
-      if (loose) return describe(loose, true);
+      if (loose) return describe(loose, true, norm.length);
     }
     return null;
   }
@@ -1071,6 +1091,7 @@
   var TEXT_LEN_THRESHOLD = 20;
   var JOIN_GAP_FACTOR = 2.2;
   var MAX_WINDOW = 6;
+  var ROTATIONS = [0, 90, 180, 270];
   var TESSERACT_INIT = {
     load_system_dawg: "0",
     load_freq_dawg: "0",
@@ -1161,6 +1182,126 @@
     ].map(([x, y]) => inverseRotatePoint(x, y, degrees, W, H));
     const b = boundsOfPoints(corners);
     return { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY };
+  }
+
+  // src/lib/lineart.js
+  var SIZE_FACTOR = 3.5;
+  var MAX_FILL = 0.34;
+  var THIN_ASPECT = 8;
+  var MIN_GLYPH_PIXELS = 12;
+  var MAX_INK_SHARE = 0.35;
+  function inkMask(grey, n) {
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < n; i++) hist[grey[i]]++;
+    let total = 0;
+    for (let v = 0; v < 256; v++) total += hist[v] * v;
+    let sumB = 0, wB = 0, best = 0, cut = 128;
+    for (let v = 0; v < 256; v++) {
+      wB += hist[v];
+      if (!wB) continue;
+      const wF = n - wB;
+      if (!wF) break;
+      sumB += v * hist[v];
+      const mB = sumB / wB, mF = (total - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > best) {
+        best = between;
+        cut = v;
+      }
+    }
+    const mask = new Uint8Array(n);
+    let ink = 0;
+    for (let i = 0; i < n; i++) if (grey[i] <= cut) {
+      mask[i] = 1;
+      ink++;
+    }
+    return { mask, ink };
+  }
+  function eachComponent(mask, w, h, visit) {
+    const n = w * h;
+    let stack = new Int32Array(1024);
+    let pixels = new Int32Array(1024);
+    for (let seed = 0; seed < n; seed++) {
+      if (mask[seed] !== 1) continue;
+      let sp = 0, count = 0;
+      stack[sp++] = seed;
+      mask[seed] = 2;
+      let minX = w, minY = h, maxX = -1, maxY = -1;
+      while (sp > 0) {
+        const i = stack[--sp];
+        const x = i % w, y = (i - x) / w;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if (count === pixels.length) {
+          const grown = new Int32Array(pixels.length * 2);
+          grown.set(pixels);
+          pixels = grown;
+        }
+        pixels[count++] = i;
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= h) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= w) continue;
+            const j = ny * w + nx;
+            if (mask[j] !== 1) continue;
+            mask[j] = 2;
+            if (sp === stack.length) {
+              const grown = new Int32Array(stack.length * 2);
+              grown.set(stack);
+              stack = grown;
+            }
+            stack[sp++] = j;
+          }
+        }
+      }
+      visit({ minX, minY, maxX, maxY, count, pixels });
+    }
+  }
+  function medianGlyphHeight(heights) {
+    if (!heights.length) return 0;
+    heights.sort((a, b) => a - b);
+    return heights[heights.length >> 1];
+  }
+  function isLineArt(c, glyphHeight) {
+    const w = c.maxX - c.minX + 1, h = c.maxY - c.minY + 1;
+    const long = Math.max(w, h), short = Math.min(w, h);
+    if (long <= SIZE_FACTOR * glyphHeight) return false;
+    if (long >= THIN_ASPECT * short) return true;
+    return c.count / (w * h) <= MAX_FILL;
+  }
+  function stripLineArtPlane(grey, px, w, h) {
+    const n = w * h;
+    const { mask, ink } = inkMask(grey, n);
+    if (!ink || ink > n * MAX_INK_SHARE) return 0;
+    const heights = [];
+    const boxes = [];
+    eachComponent(mask, w, h, (c) => {
+      boxes.push({ minX: c.minX, minY: c.minY, maxX: c.maxX, maxY: c.maxY, count: c.count });
+      if (c.count >= MIN_GLYPH_PIXELS) heights.push(c.maxY - c.minY + 1);
+    });
+    const glyphHeight = medianGlyphHeight(heights);
+    if (!glyphHeight) return 0;
+    const doomed = /* @__PURE__ */ new Set();
+    for (let i = 0; i < boxes.length; i++) if (isLineArt(boxes[i], glyphHeight)) doomed.add(i);
+    if (!doomed.size) return 0;
+    const { mask: mask2 } = inkMask(grey, n);
+    let idx = 0;
+    eachComponent(mask2, w, h, (c) => {
+      if (doomed.has(idx++)) {
+        for (let k = 0; k < c.count; k++) {
+          const i = c.pixels[k];
+          grey[i] = 255;
+          const j = i * 4;
+          px[j] = px[j + 1] = px[j + 2] = 255;
+          px[j + 3] = 255;
+        }
+      }
+    });
+    return doomed.size;
   }
 
   // src/lib/preprocess.js
@@ -1292,6 +1433,18 @@
       return out < 0 ? 0 : out > 255 ? 255 : out;
     });
   }
+  function stripLineArt(srcCanvas) {
+    const plane = greyPlane(srcCanvas);
+    if (!plane) return srcCanvas;
+    const { data: grey, w, h, img } = plane;
+    const removed = stripLineArtPlane(grey, img.data, w, h);
+    if (!removed) return srcCanvas;
+    const out = makeCanvas();
+    out.width = w;
+    out.height = h;
+    out.getContext("2d").putImageData(img, 0, 0);
+    return out;
+  }
   function conditionForOcr(srcCanvas, mode = "auto") {
     if (mode === "off") return srcCanvas;
     if (mode === "binarize") return preprocessForOcr(srcCanvas);
@@ -1313,6 +1466,10 @@
   async function runOcrForPage(pageNum, onProgress) {
     const epoch = S.docEpoch;
     const data = S.pageData.get(pageNum);
+    const wanted = rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1);
+    const alreadyRun = data.ocrRotations || [];
+    const rotations = wanted.filter((deg) => !alreadyRun.includes(deg));
+    if (!rotations.length) return data;
     const page = await getPageProxy(pageNum);
     const viewport = page.getViewport({ scale: OCR_SCALE });
     const base = document.createElement("canvas");
@@ -1322,10 +1479,10 @@
     await page.render({ canvasContext: baseCtx, viewport }).promise;
     data.thumbCanvas = base;
     data.thumbScale = OCR_SCALE;
-    const ocrBase = conditionForOcr(base);
+    const ocrBase = stripLineArt(conditionForOcr(base));
     const W = base.width, H = base.height;
-    const rotations = rotatedTextToggle.checked ? [0, 90, 180, 270] : [0];
     const allWords = [];
+    const completed = [];
     const worker = await ensureOcrWorker();
     for (let i = 0; i < rotations.length; i++) {
       if (S.processingCancelled || S.skipCurrentPageRequested || epoch !== S.docEpoch) break;
@@ -1359,8 +1516,10 @@
           allWords.push({ rotation: deg, words: mappedWords });
         }
       }
+      completed.push(deg);
     }
-    data.ocrLines = allWords;
+    data.ocrLines = (data.ocrLines || []).concat(allWords);
+    data.ocrRotations = alreadyRun.concat(completed);
     return data;
   }
   function searchOcr(pageNum, query) {
@@ -1368,6 +1527,7 @@
     if (!data || !data.ocrLines) return [];
     const results = [];
     for (const line of data.ocrLines) {
+      if (line.rotation !== 0 && !rotatedTextToggle.checked) continue;
       const items = line.words.map((w, i) => ({
         key: i,
         text: w.text,
@@ -1394,6 +1554,7 @@
           corrected: hit.corrected,
           bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
           confidence: avgConf,
+          whole: hit.match.whole,
           fuzzy: hit.match.fuzzy,
           confused: hit.match.confused,
           matchPos: hit.match.pos,
@@ -1417,6 +1578,9 @@
     const epoch = S.docEpoch;
     S.isBackgroundRunning = true;
     S.processingCancelled = false;
+    setSearchEnabled(false);
+    cancelProcBtn.disabled = false;
+    showViewerLoading("");
     if (!S.tickerHandle) S.tickerHandle = setInterval(updateProcSummary, 500);
     runQueue(epoch);
   }
@@ -1444,9 +1608,12 @@
       clearInterval(S.tickerHandle);
       S.tickerHandle = null;
     }
+    hideViewerLoading();
     updateProcSummary();
     cancelProcBtn.disabled = true;
     skipPageBtn.disabled = true;
+    setSearchEnabled(S.numPages > 0);
+    if (S.currentQuery.norm) updateSearchSummary();
   }
   async function processPage(pageNum, epoch) {
     const data = S.pageData.get(pageNum);
@@ -1456,10 +1623,12 @@
     updateProcSummary();
     if (pageNum === S.currentPage) updatePageBadge();
     let skipOcr = false;
-    try {
-      skipOcr = await extractTextLayer(pageNum);
-    } catch (err) {
-      console.warn("Text extraction failed on page", pageNum, err);
+    if (!data.textItems) {
+      try {
+        skipOcr = await extractTextLayer(pageNum);
+      } catch (err) {
+        console.warn("Text extraction failed on page", pageNum, err);
+      }
     }
     if (epoch !== S.docEpoch) return;
     if (!skipOcr) {
@@ -1486,10 +1655,7 @@
       }
       S.skipCurrentPageRequested = false;
       if (epoch !== S.docEpoch) return;
-      if (pageNum === S.currentPage) {
-        skipPageBtn.disabled = true;
-        hidePageProgressBanner();
-      }
+      if (pageNum === S.currentPage) skipPageBtn.disabled = true;
     }
     updateProcSummary();
     if (pageNum === S.currentPage) {
@@ -1517,36 +1683,39 @@
     if (!S.numPages) {
       procDetailText.textContent = "No document loaded.";
       procBarInner.style.width = "0%";
-      procBarInner.classList.remove("processing");
+      procBarInner.classList.remove("processing", "done");
       procSpinner.classList.remove("active");
       return;
     }
-    const pct = Math.min(100, Math.round(progressCredit / S.numPages * 100));
-    procBarInner.style.width = pct + "%";
     const anyActive = S.isBackgroundRunning;
+    const allDone = !anyActive && done === S.numPages;
+    const pct = allDone ? 100 : Math.min(100, Math.round(progressCredit / S.numPages * 100));
+    procBarInner.style.width = pct + "%";
     procBarInner.classList.toggle("processing", anyActive);
+    procBarInner.classList.toggle("done", allDone);
     procSpinner.classList.toggle("active", anyActive);
     let label = "Processed " + done + " / " + S.numPages + " pages" + (ocrCount ? " (" + ocrCount + " via OCR)" : "");
     const cd = S.pageData.get(S.currentPage);
-    if (cd && cd.status === "ocr-running" && cd.ocrProgressLabel) {
+    if (anyActive && cd && cd.status === "ocr-running" && cd.ocrProgressLabel) {
       const elapsed = Math.round((Date.now() - (cd.stepStartedAt || Date.now())) / 1e3);
       label += " \u2014 page " + S.currentPage + ": " + cd.ocrProgressLabel + " (running " + elapsed + "s)";
-      showPageProgressBanner(S.currentPage, cd.ocrProgressLabel + " \u2014 running " + elapsed + "s");
-    } else if (cd && cd.status === "text-extracting") {
+      showViewerLoading("Page " + S.currentPage + " of " + S.numPages + ": " + cd.ocrProgressLabel + " \u2014 running " + elapsed + "s");
+    } else if (anyActive && cd && cd.status === "text-extracting") {
       label += " \u2014 page " + S.currentPage + ": extracting text";
-    } else {
-      hidePageProgressBanner();
+      showViewerLoading("Page " + S.currentPage + " of " + S.numPages + ": extracting text");
+    } else if (anyActive) {
+      showViewerLoading("");
     }
+    if (allDone) label += " \u2014 done, ready to search";
+    else if (!anyActive) label += " \u2014 stopped";
     procDetailText.textContent = label;
   }
-  function showPageProgressBanner(pageNum, text) {
-    pageProgressBanner.classList.add("visible");
-    pageProgressSpinner.classList.add("active");
-    pageProgressText.textContent = "Page " + pageNum + " of " + S.numPages + ": " + text;
+  function showViewerLoading(detail) {
+    viewerLoading.classList.add("visible");
+    viewerLoadingText.textContent = detail;
   }
-  function hidePageProgressBanner() {
-    pageProgressBanner.classList.remove("visible");
-    pageProgressSpinner.classList.remove("active");
+  function hideViewerLoading() {
+    viewerLoading.classList.remove("visible");
   }
   skipPageBtn.addEventListener("click", () => {
     S.skipCurrentPageRequested = true;
@@ -1555,6 +1724,28 @@
     S.processingCancelled = true;
     S.skipCurrentPageRequested = true;
     cancelProcBtn.disabled = true;
+  });
+  rotatedTextToggle.addEventListener("change", () => {
+    if (!S.numPages) return;
+    if (!rotatedTextToggle.checked) {
+      if (S.currentQuery.norm) runFullSearch();
+      return;
+    }
+    let queued = 0;
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
+      if (!d || d.status !== "ocr-done") continue;
+      const seen = d.ocrRotations || [];
+      if (ROTATIONS.every((deg) => seen.includes(deg))) continue;
+      d.status = "pending";
+      queued++;
+    }
+    if (!queued) {
+      if (S.currentQuery.norm) runFullSearch();
+      return;
+    }
+    updateProcSummary();
+    if (!S.isBackgroundRunning) startBackgroundProcessing();
   });
 
   // src/lib/bands.js
@@ -1639,6 +1830,18 @@
     el.addEventListener("click", () => jumpToResult(i));
     return el;
   }
+  var confidenceOf = (res) => res.source === "ocr" ? res.confidence : 100;
+  function compareResults(a, b) {
+    if (!!a.whole !== !!b.whole) return a.whole ? -1 : 1;
+    if (a.fuzzy !== b.fuzzy) return a.fuzzy ? 1 : -1;
+    if (a.fuzzy && b.fuzzy) {
+      const byConf = confidenceOf(b) - confidenceOf(a);
+      if (byConf) return byConf;
+    }
+    const byScore = (b.score || 0) - (a.score || 0);
+    if (byScore) return byScore;
+    return a.page - b.page;
+  }
   function renderResultsList() {
     resultsList.innerHTML = "";
     if (!S.lastResults.length) {
@@ -1650,6 +1853,7 @@
     }
     const grouped = new Map(BANDS.map((b) => [b, []]));
     S.lastResults.forEach((res, i) => grouped.get(bandOf(res)).push([res, i]));
+    for (const group of grouped.values()) group.sort((a, b) => compareResults(a[0], b[0]));
     const populated = BANDS.filter((b) => grouped.get(b).length);
     for (const band of populated) {
       const group = grouped.get(band);
@@ -1786,33 +1990,6 @@
     const dw = sw * scaleFit, dh = sh * scaleFit;
     const dx = (canvasEl.width - dw) / 2, dy = (canvasEl.height - dh) / 2;
     ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh);
-  }
-  exportCsvBtn.addEventListener("click", exportCsv);
-  function exportCsv() {
-    const rows = [["Page", "Source", "Confidence", "Matched Text", "Corrected", "Raw OCR Text"]];
-    for (const r of S.lastResults) {
-      rows.push([
-        r.page,
-        r.source,
-        r.source === "ocr" ? Math.round(r.confidence) + "%" : "",
-        r.text,
-        r.corrected ? "yes" : "",
-        r.corrected ? r.rawText : ""
-      ]);
-    }
-    const csv = rows.map((row) => row.map((cell) => {
-      const s = String(cell ?? "");
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    }).join(",")).join("\r\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "pid_tag_matches.csv";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   }
 
   // src/app/viewer.js
@@ -2074,8 +2251,6 @@
       emptyViewer.style.display = "none";
       canvasStage.style.display = "";
       toolbar.style.display = "";
-      searchInput.disabled = false;
-      searchBtn.disabled = false;
       cancelProcBtn.disabled = false;
       pageCountLabel.textContent = "/ " + S.numPages;
       pageNumInput.value = "1";
@@ -2119,7 +2294,6 @@
     }
     resultsList.innerHTML = '<div class="empty-note">Load a PDF and run a search to see matches here.</div>';
     resultsCount.textContent = "Results";
-    exportCsvBtn.disabled = true;
     searchSummary.textContent = "";
     searchInput.disabled = true;
     searchBtn.disabled = true;
@@ -2128,8 +2302,8 @@
     toolbar.style.display = "none";
     canvasStage.style.display = "none";
     emptyViewer.style.display = "";
-    hidePageProgressBanner();
-    procBarInner.classList.remove("processing");
+    hideViewerLoading();
+    procBarInner.classList.remove("processing", "done");
     procSpinner.classList.remove("active");
   }
   function getPageProxy(pageNum) {
@@ -2223,6 +2397,7 @@
           text: hit.text,
           itemIndices: hit.items.map((it) => it.key),
           confidence: null,
+          whole: hit.match.whole,
           fuzzy: hit.match.fuzzy,
           confused: hit.match.confused,
           matchPos: hit.match.pos,
@@ -2269,11 +2444,13 @@
   }
   function runFullSearch() {
     const raw = searchInput.value.trim();
+    const exactOn = exactToggle.checked;
+    const fuzzyOn = fuzzyToggle.checked;
     S.currentQuery = {
       raw,
       norm: normalize(raw),
-      exact: exactToggle.checked,
-      fuzzy: fuzzyToggle.checked,
+      exactOnly: exactOn && !fuzzyOn,
+      fuzzy: fuzzyOn,
       // First pass allows only substitutions, which is roughly ten times cheaper
       // than the full alignment. See below for when that gets lifted.
       allowIndels: false
@@ -2319,12 +2496,15 @@
       const d = S.pageData.get(p);
       if (!["text-done", "ocr-done", "skipped", "error"].includes(d.status)) pagesUnprocessed.push(p);
     }
-    let msg = S.lastResults.length + " match" + (S.lastResults.length === 1 ? "" : "es") + " found so far";
+    let msg = S.lastResults.length + " match" + (S.lastResults.length === 1 ? "" : "es") + " found" + (pagesUnprocessed.length ? " so far" : "");
     if (S.deepSearchUsed) msg += " \u2014 nothing matched exactly, so these allow for characters OCR lost entirely. Check the crops.";
     if (pagesUnprocessed.length) msg += " (" + pagesUnprocessed.length + " page" + (pagesUnprocessed.length === 1 ? "" : "s") + " still processing \u2014 results will keep appearing)";
     searchSummary.textContent = msg;
     resultsCount.textContent = S.lastResults.length + " result" + (S.lastResults.length === 1 ? "" : "s");
-    exportCsvBtn.disabled = S.lastResults.length === 0;
+  }
+  function setSearchEnabled(enabled) {
+    searchInput.disabled = !enabled;
+    searchBtn.disabled = !enabled;
   }
   searchBtn.addEventListener("click", runFullSearch);
   searchInput.addEventListener("keydown", (e) => {

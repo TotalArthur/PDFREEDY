@@ -21,7 +21,7 @@ const S = {
   processingCancelled: false,
   skipCurrentPageRequested: false,
   isBackgroundRunning: false,
-  currentQuery: { raw: '', norm: '', exact: false, fuzzy: false },
+  currentQuery: { raw: '', norm: '', exactOnly: false, fuzzy: false },
   tickerHandle: null,
   // Set when a search found nothing on the cheap pass and only turned results
   // up once the matcher was allowed to absorb dropped characters. Those hits

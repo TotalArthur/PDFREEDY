@@ -1,4 +1,5 @@
 import { clamp } from './text.js';
+import { stripLineArtPlane } from './lineart.js';
 
 // Canvases are created through a factory so this module can be exercised
 // outside a browser (the tests drive it with a plain typed-array stand-in).
@@ -214,6 +215,25 @@ function flattenIllumination(srcCanvas, gain = 1.6) {
  * are allowed to look at the neighbourhood. So that is all this does, and only
  * when there is a gradient to remove.
  */
+/*
+ * Remove the drawing's own lines from the copy handed to OCR.
+ *
+ * See lineart.js for why this is not cosmetic: a circle drawn around a tag
+ * costs the engine that tag entirely, and a P&ID draws a circle around every
+ * instrument on the sheet.
+ */
+function stripLineArt(srcCanvas) {
+  const plane = greyPlane(srcCanvas);
+  if (!plane) return srcCanvas;
+  const { data: grey, w, h, img } = plane;
+  const removed = stripLineArtPlane(grey, img.data, w, h);
+  if (!removed) return srcCanvas;
+  const out = makeCanvas();
+  out.width = w; out.height = h;
+  out.getContext('2d').putImageData(img, 0, 0);
+  return out;
+}
+
 function conditionForOcr(srcCanvas, mode = 'auto') {
   if (mode === 'off') return srcCanvas;
   if (mode === 'binarize') return preprocessForOcr(srcCanvas);
@@ -225,4 +245,4 @@ function conditionForOcr(srcCanvas, mode = 'auto') {
 }
 
 export { preprocessForOcr, flattenIllumination, conditionForOcr, rotateCanvas,
-         setCanvasFactory, illuminationSpread, UNEVEN_FLOOR };
+         stripLineArt, setCanvasFactory, illuminationSpread, UNEVEN_FLOOR };
