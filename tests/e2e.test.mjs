@@ -226,6 +226,11 @@ if (process.env.SKIP_OCR) {
       { text: label, x: cx - 26, y: cy + 6, size: 15 },
       { text: 'PT-9042', x: cx - 34, y: cy - 22, size: 15 });
   });
+  // A tag drawn rotated 90 degrees, the way a CAD tool labels a vertical pipe
+  // run — this is what the "also scan rotated text" toggle exists to catch,
+  // and what the sideways-glyph pre-check (src/lib/lineart.js) must NOT
+  // mistake for an all-horizontal page and skip the 90/270 passes over.
+  bubbles.push({ text: 'FV-3301', x: 520, y: 150, size: 15, rotate: 90 });
   // A raster behind the drawing, so the page is routed to OCR the way a scanned
   // sheet is rather than being served from its text layer.
   bubbles.unshift({ image: { x: 0, y: 0, w: 560, h: 420 } });
@@ -260,6 +265,14 @@ if (process.env.SKIP_OCR) {
   const ocrRows = r.filter(x => x.badges.includes('OCR'));
   check('a tag inside an instrument bubble is read, and every occurrence is reported',
     ocrRows.length >= 5, ocrRows.length + ' of 6 bubbles reported');
+  // The tag is real embedded PDF text, so it's found via the text layer
+  // regardless of OCR settings (see groupItemsIntoLines — rotated text-layer
+  // items are handled independently of OCR rotation passes). What isolates
+  // the pixel path is the OCR badge specifically, the same way the bubble
+  // check above does.
+  const beforeRotatedOcr = await search('FV-3301');
+  check('a tag drawn sideways is not read by the default landscape-only OCR pass',
+    !beforeRotatedOcr.some(x => x.badges.includes('OCR')), JSON.stringify(beforeRotatedOcr));
 
   // ---- asking for rotated text after the fact ---------------------------
   // Ticking the box mid-document has to put the page back to work rather than
@@ -274,6 +287,14 @@ if (process.env.SKIP_OCR) {
   check('and finishes back in a searchable state', await page.isEnabled('#searchInput'));
   check('the tag is still found after the extra passes',
     (await search('PT-9042')).length >= 1);
+  // The point of the sideways-glyph pre-check: this page genuinely has
+  // rotated text on it, so the 90/270 passes must actually have run rather
+  // than being skipped as "no evidence of sideways text" — proven by an OCR
+  // row showing up for it now, not just the text-layer row that was already
+  // there.
+  const afterRotatedOcr = await search('FV-3301');
+  check('and a tag drawn sideways is read by OCR once the rotated passes run',
+    afterRotatedOcr.some(x => x.badges.includes('OCR')), JSON.stringify(afterRotatedOcr));
 }
 
 check('no script errors during the whole run', errors.length === 0, errors.join(' | '));

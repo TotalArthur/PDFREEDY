@@ -1091,6 +1091,7 @@
   var JOIN_GAP_FACTOR = 2.2;
   var MAX_WINDOW = 6;
   var ROTATIONS = [0, 90, 180, 270];
+  var SIDEWAYS_ROTATIONS = [90, 270];
   var OCR_POOL_SIZE = Math.max(1, Math.min(
     8,
     (typeof navigator !== "undefined" && navigator.hardwareConcurrency || 4) - 1
@@ -1306,6 +1307,27 @@
     });
     return doomed.size;
   }
+  var SIDEWAYS_ASPECT = 0.85;
+  var MIN_SIDEWAYS_COMPONENTS = 2;
+  var MIN_SIDEWAYS_SIZE_FRACTION = 0.5;
+  function hasSidewaysGlyphs(grey, w, h) {
+    const { mask, ink } = inkMask(grey, w * h);
+    if (!ink) return false;
+    const glyphs = [];
+    eachComponent(mask, w, h, (c) => {
+      if (c.count < MIN_GLYPH_PIXELS) return;
+      glyphs.push({ w: c.maxX - c.minX + 1, h: c.maxY - c.minY + 1, count: c.count });
+    });
+    if (!glyphs.length) return false;
+    const counts = glyphs.map((g) => g.count).sort((a, b) => a - b);
+    const sizeFloor = counts[counts.length >> 1] * MIN_SIDEWAYS_SIZE_FRACTION;
+    let sideways = 0;
+    for (const g of glyphs) {
+      if (g.count < sizeFloor) continue;
+      if (g.h / g.w < SIDEWAYS_ASPECT) sideways++;
+    }
+    return sideways >= MIN_SIDEWAYS_COMPONENTS;
+  }
 
   // src/lib/preprocess.js
   var makeCanvas = () => document.createElement("canvas");
@@ -1448,6 +1470,11 @@
     out.getContext("2d").putImageData(img, 0, 0);
     return out;
   }
+  function likelySidewaysText(srcCanvas) {
+    const plane = greyPlane(srcCanvas);
+    if (!plane) return true;
+    return hasSidewaysGlyphs(plane.data, plane.w, plane.h);
+  }
   function conditionForOcr(srcCanvas, mode = "auto") {
     if (mode === "off") return srcCanvas;
     if (mode === "binarize") return preprocessForOcr(srcCanvas);
@@ -1484,7 +1511,7 @@
     const data = S.pageData.get(pageNum);
     const wanted = rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1);
     const alreadyRun = data.ocrRotations || [];
-    const rotations = wanted.filter((deg) => !alreadyRun.includes(deg));
+    let rotations = wanted.filter((deg) => !alreadyRun.includes(deg));
     if (!rotations.length) return data;
     const page = await getPageProxy(pageNum);
     const viewport = page.getViewport({ scale: OCR_SCALE });
@@ -1496,6 +1523,16 @@
     data.thumbCanvas = base;
     data.thumbScale = OCR_SCALE;
     const ocrBase = stripLineArt(conditionForOcr(base));
+    if (rotations.some((deg) => SIDEWAYS_ROTATIONS.includes(deg)) && !likelySidewaysText(ocrBase)) {
+      const before = rotations.length;
+      rotations = rotations.filter((deg) => !SIDEWAYS_ROTATIONS.includes(deg));
+      console.debug(
+        "Skipping 90/270 OCR on page",
+        pageNum,
+        "\u2014 no sideways text detected (" + (before - rotations.length) + " pass(es) skipped)"
+      );
+    }
+    if (!rotations.length) return data;
     const W = base.width, H = base.height;
     const allWords = [];
     const completed = [];

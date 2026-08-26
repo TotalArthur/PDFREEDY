@@ -8,6 +8,11 @@ const MAX_WINDOW = 6;                // max consecutive items/words joined when 
 // the rest are opt-in ("Also scan rotated/vertical text") and are added to a
 // page's existing words rather than replacing them.
 const ROTATIONS = [0, 90, 180, 270];
+// The two passes a quick pixel check can justify skipping — see
+// likelySidewaysText in preprocess.js. An upside-down glyph has the same
+// bounding-box shape as an upright one, so that check can't tell 0 from 180
+// apart; those two always run when the toggle is on. Only 90/270 are gated.
+const SIDEWAYS_ROTATIONS = [90, 270];
 
 // Tesseract workers in the pool. One core is left for the UI thread (canvas
 // rendering, DOM updates) so OCR throughput doesn't come at the cost of a
@@ -74,4 +79,4 @@ function tesseractParams(PSM) {
 }
 
 export { OCR_SCALE, TEXT_LEN_THRESHOLD, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS,
-         OCR_POOL_SIZE, TESSERACT_INIT, tesseractParams };
+         SIDEWAYS_ROTATIONS, OCR_POOL_SIZE, TESSERACT_INIT, tesseractParams };

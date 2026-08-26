@@ -1,5 +1,5 @@
 import { clamp } from './text.js';
-import { stripLineArtPlane } from './lineart.js';
+import { stripLineArtPlane, hasSidewaysGlyphs } from './lineart.js';
 
 // Canvases are created through a factory so this module can be exercised
 // outside a browser (the tests drive it with a plain typed-array stand-in).
@@ -234,6 +234,23 @@ function stripLineArt(srcCanvas) {
   return out;
 }
 
+/*
+ * Quick pre-check: is it worth running the 90/270 OCR passes on this page at
+ * all? See hasSidewaysGlyphs in lineart.js for the reasoning and the
+ * conservative bias — this only ever says "found no evidence," never "there
+ * is definitely nothing here," and a canvas that can't be read at all is
+ * treated the same as "can't rule it out."
+ *
+ * Takes the already-conditioned, already-line-art-stripped copy handed to
+ * OCR (see runOcrForPage) rather than the raw render, so line art doesn't
+ * have to be filtered out twice.
+ */
+function likelySidewaysText(srcCanvas) {
+  const plane = greyPlane(srcCanvas);
+  if (!plane) return true;
+  return hasSidewaysGlyphs(plane.data, plane.w, plane.h);
+}
+
 function conditionForOcr(srcCanvas, mode = 'auto') {
   if (mode === 'off') return srcCanvas;
   if (mode === 'binarize') return preprocessForOcr(srcCanvas);
@@ -245,4 +262,4 @@ function conditionForOcr(srcCanvas, mode = 'auto') {
 }
 
 export { preprocessForOcr, flattenIllumination, conditionForOcr, rotateCanvas,
-         stripLineArt, setCanvasFactory, illuminationSpread, UNEVEN_FLOOR };
+         stripLineArt, likelySidewaysText, setCanvasFactory, illuminationSpread, UNEVEN_FLOOR };

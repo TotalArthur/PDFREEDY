@@ -1,8 +1,8 @@
 import { S } from './state.js';
 import { findWindowMatches } from '../lib/windows.js';
-import { conditionForOcr, rotateCanvas, stripLineArt } from '../lib/preprocess.js';
+import { conditionForOcr, rotateCanvas, stripLineArt, likelySidewaysText } from '../lib/preprocess.js';
 import { mapBoxBack, readingAxis, boundsOfPoints } from '../lib/geometry.js';
-import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS, OCR_POOL_SIZE, TESSERACT_INIT, tesseractParams } from './config.js';
+import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS, SIDEWAYS_ROTATIONS, OCR_POOL_SIZE, TESSERACT_INIT, tesseractParams } from './config.js';
 import { getPageProxy } from './pdf.js';
 import { getCorrection } from './corrections.js';
 import {
@@ -64,7 +64,7 @@ async function runOcrForPage(pageNum, onProgress) {
   // been read costs the three missing rotations and not a re-read.
   const wanted = rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1);
   const alreadyRun = data.ocrRotations || [];
-  const rotations = wanted.filter(deg => !alreadyRun.includes(deg));
+  let rotations = wanted.filter(deg => !alreadyRun.includes(deg));
   if (!rotations.length) return data;
 
   const page = await getPageProxy(pageNum);
@@ -89,6 +89,19 @@ async function runOcrForPage(pageNum, onProgress) {
   // lineart.js. Done once here rather than per rotation, since the strokes are
   // the same whichever way up the page is read.
   const ocrBase = stripLineArt(conditionForOcr(base));
+
+  // Brute-forcing all four rotations is the safe default, not a free one —
+  // 90/270 only earn their cost on the minority of pages that actually have
+  // something drawn sideways. A quick read of this page's own glyphs (see
+  // likelySidewaysText) decides whether they're worth it here; see
+  // SIDEWAYS_ROTATIONS for why 0/180 are never gated by it.
+  if (rotations.some(deg => SIDEWAYS_ROTATIONS.includes(deg)) && !likelySidewaysText(ocrBase)) {
+    const before = rotations.length;
+    rotations = rotations.filter(deg => !SIDEWAYS_ROTATIONS.includes(deg));
+    console.debug('Skipping 90/270 OCR on page', pageNum,
+      '— no sideways text detected (' + (before - rotations.length) + ' pass(es) skipped)');
+  }
+  if (!rotations.length) return data;
 
   const W = base.width, H = base.height;
   const allWords = [];   // flattened, coordinates already mapped back to C0 space

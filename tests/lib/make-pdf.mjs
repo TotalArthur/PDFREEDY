@@ -20,7 +20,12 @@ function circleOps({ x, y, r, width = 1 }) {
     `${x + k} ${y - r} ${x + r} ${y - k} ${x + r} ${y} c\nS`;
 }
 
-// pages: [[ {text, x, y, size?} | {circle: {x, y, r, width?}} | {image: {x, y, w, h}}, ... ], ...]
+// pages: [[ {text, x, y, size?, rotate?} | {circle: {x, y, r, width?}} | {image: {x, y, w, h}}, ... ], ...]
+//
+// `rotate` (degrees, counterclockwise) is how a fixture draws the "vertical
+// pipe label" case: text set with a rotated text matrix instead of a plain
+// translation, the way a CAD tool rotates a string rather than typing it
+// sideways letter by letter.
 //
 // The image is a single grey pixel stretched over a rectangle. It carries no
 // information — its job is to make the page look like a scan, because a page
@@ -41,7 +46,13 @@ export function makePdf(pages, { width = 612, height = 792 } = {}) {
     const ops = items.map(it => {
       if (it.circle) return circleOps(it.circle);
       if (it.image) return `q ${it.image.w} 0 0 ${it.image.h} ${it.image.x} ${it.image.y} cm /Im0 Do Q`;
-      return `BT /F1 ${it.size || 12} Tf ${it.x} ${it.y} Td (${esc(it.text)}) Tj ET`;
+      const size = it.size || 12;
+      if (it.rotate) {
+        const rad = it.rotate * Math.PI / 180;
+        const a = Math.cos(rad), b = Math.sin(rad), c = -Math.sin(rad), d = Math.cos(rad);
+        return `BT /F1 ${size} Tf ${a} ${b} ${c} ${d} ${it.x} ${it.y} Tm (${esc(it.text)}) Tj ET`;
+      }
+      return `BT /F1 ${size} Tf ${it.x} ${it.y} Td (${esc(it.text)}) Tj ET`;
     }).join('\n');
     const streamId = add(`<< /Length ${ops.length} >>\nstream\n${ops}\nendstream`);
     pageIds.push(add(

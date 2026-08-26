@@ -199,5 +199,67 @@ function stripLineArtPlane(grey, px, w, h) {
   return doomed.size;
 }
 
-export { stripLineArtPlane, isLineArt, inkMask, eachComponent,
-         SIZE_FACTOR, MAX_FILL, THIN_ASPECT, MAX_INK_SHARE };
+/*
+ * Is there any text on this (already line-art-stripped) page that looks
+ * drawn on its side?
+ *
+ * A rotated glyph is the same glyph with its bounding box's width and height
+ * swapped, so a component that is wider than it is tall — where the sheet's
+ * OTHER glyphs are not — is what a character looks like once the drawing
+ * rotates it 90 degrees. That is a cheap, glyph-level read of the page's own
+ * pixels, not a guess about the drawing: it needs the line art gone first (a
+ * pipe run or a border is plenty "wide", for reasons that have nothing to do
+ * with text), which is exactly what has already happened by the time OCR
+ * calls this — see runOcrForPage.
+ *
+ * The threshold below is measured, not assumed: rendered on an actual sheet,
+ * this font's upright glyphs came out at 1.03-1.54 (taller than wide, often
+ * not by much), and the SAME glyphs rotated 90 degrees came out at 0.64-0.97
+ * — the reciprocal range, not a dramatically different one. A cutoff much
+ * below 1 (0.6 was tried first) missed most of that range and rarely fired
+ * on real rotated text at all; 0.85 clears every upright ratio measured with
+ * room to spare and still catches the rotated ones short of the one letter
+ * that happened to land right at "square."
+ *
+ * Used to decide whether the 90/270 OCR passes are worth running at all, so
+ * it is deliberately loose in the direction that keeps them running: one
+ * wide component (a hyphen, a line-art fragment the shape rule let through)
+ * proves nothing and doesn't count, but it takes very little genuine sideways
+ * text to trip MIN_SIDEWAYS_COMPONENTS, and finding none is never treated as
+ * proof there isn't any — only as "no evidence turned up."
+ */
+const SIDEWAYS_ASPECT = 0.85;       // height less than this x width -> on its side
+const MIN_SIDEWAYS_COMPONENTS = 2;  // one wide component doesn't count; it's noise
+// A punctuation mark (a hyphen, a colon) is wide regardless of which way the
+// text around it runs, and a real P&ID tag is full of them — "PT-9042"
+// stamped on six bubbles is twelve wide hyphens with no rotation involved.
+// What tells a hyphen apart from a rotated character is size, not shape:
+// rotating a glyph swaps its width and height but can't change how much ink
+// it's made of, so a wide component has to hold at least this much of a
+// typical glyph's own pixel count before it counts as evidence.
+const MIN_SIDEWAYS_SIZE_FRACTION = 0.5;
+
+function hasSidewaysGlyphs(grey, w, h) {
+  const { mask, ink } = inkMask(grey, w * h);
+  if (!ink) return false;
+
+  const glyphs = [];
+  eachComponent(mask, w, h, (c) => {
+    if (c.count < MIN_GLYPH_PIXELS) return;
+    glyphs.push({ w: c.maxX - c.minX + 1, h: c.maxY - c.minY + 1, count: c.count });
+  });
+  if (!glyphs.length) return false;
+  const counts = glyphs.map(g => g.count).sort((a, b) => a - b);
+  const sizeFloor = counts[counts.length >> 1] * MIN_SIDEWAYS_SIZE_FRACTION;
+
+  let sideways = 0;
+  for (const g of glyphs) {
+    if (g.count < sizeFloor) continue;
+    if (g.h / g.w < SIDEWAYS_ASPECT) sideways++;
+  }
+  return sideways >= MIN_SIDEWAYS_COMPONENTS;
+}
+
+export { stripLineArtPlane, isLineArt, inkMask, eachComponent, hasSidewaysGlyphs,
+         SIZE_FACTOR, MAX_FILL, THIN_ASPECT, MAX_INK_SHARE,
+         SIDEWAYS_ASPECT, MIN_SIDEWAYS_COMPONENTS };

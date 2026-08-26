@@ -11,7 +11,7 @@
  *
  *   node tests/lineart.test.js
  */
-import { stripLineArtPlane, isLineArt } from '../src/lib/lineart.js';
+import { stripLineArtPlane, isLineArt, hasSidewaysGlyphs } from '../src/lib/lineart.js';
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
@@ -94,6 +94,67 @@ for (const i of glyphPixels) {
 const before = Uint8Array.from(grey2);
 check('nothing is removed', stripLineArtPlane(grey2, px2, W, H) === 0);
 check('and the image is unchanged', grey2.every((v, i) => v === before[i]));
+
+// ---------------------------------------------------------------------------
+// Detecting text drawn on its side (used to decide whether the 90/270 OCR
+// passes are worth running — see likelySidewaysText in preprocess.js). A
+// rotated glyph's bounding box has width and height swapped relative to an
+// upright one, so this is checked on plain rectangles rather than the fuller
+// glyph shape the earlier tests use — only the box aspect ratio matters here.
+console.log('\nDetecting text drawn on its side');
+
+function paintBoxes(w, h, boxes) {
+  const grey = new Uint8Array(w * h).fill(255);
+  for (const [x0, y0, bw, bh] of boxes) {
+    for (let y = y0; y < y0 + bh; y++) {
+      for (let x = x0; x < x0 + bw; x++) grey[y * w + x] = 0;
+    }
+  }
+  return grey;
+}
+
+{
+  // Five upright glyphs, each taller than wide — an ordinary horizontal tag.
+  const grey = paintBoxes(200, 40, [
+    [10, 10, 10, 20], [30, 10, 10, 20], [50, 10, 10, 20], [70, 10, 10, 20], [90, 10, 10, 20],
+  ]);
+  check('a page of upright glyphs is not flagged as sideways',
+    !hasSidewaysGlyphs(grey, 200, 40));
+}
+{
+  // A single wide component (a hyphen, say) among upright glyphs is noise,
+  // not evidence of a rotated word.
+  const grey = paintBoxes(200, 40, [
+    [10, 10, 10, 20], [30, 18, 10, 4], [50, 10, 10, 20],
+  ]);
+  check('one wide component alone does not count',
+    !hasSidewaysGlyphs(grey, 200, 40));
+}
+{
+  // Several glyphs wider than they are tall — a word rotated 90 degrees.
+  const grey = paintBoxes(200, 40, [
+    [10, 10, 20, 10], [40, 10, 20, 10], [70, 10, 20, 10],
+  ]);
+  check('several wide components are flagged as sideways text',
+    hasSidewaysGlyphs(grey, 200, 40));
+}
+{
+  const grey = new Uint8Array(200 * 40).fill(255);
+  check('a blank page is not flagged as sideways', !hasSidewaysGlyphs(grey, 200, 40));
+}
+{
+  // The bug this size floor exists for: the same tag stamped on several
+  // bubbles is the same hyphen several times over. More than
+  // MIN_SIDEWAYS_COMPONENTS of them must still not count — a hyphen is a
+  // fraction of a normal glyph's size, whichever way the text around it
+  // runs, and that's what actually rules it out, not the count.
+  const boxes = [];
+  for (let i = 0; i < 10; i++) boxes.push([10 + i * 20, 10, 10, 20]); // upright glyphs
+  for (let i = 0; i < 6; i++) boxes.push([10 + i * 20, 40, 10, 4]);   // hyphens
+  const grey = paintBoxes(220, 60, boxes);
+  check('many repeated hyphens do not add up to sideways text',
+    !hasSidewaysGlyphs(grey, 220, 60));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
