@@ -105,6 +105,34 @@ function costOf(a, b) {
   return COST_TABLE[a * A + b];
 }
 
+/*
+ * What it costs to replace a character OCR could not read.
+ *
+ * The confusion table says which glyphs look alike. It has nothing to say about
+ * the other reason a read is wrong: the engine simply couldn't make it out. A
+ * character reported at 0% confidence is not the assertion "this is a B", it is
+ * "I don't know" — and treating it as evidence AGAINST a match is what made the
+ * tool rank a genuine find level with two wrong ones.
+ *
+ * So an unlisted substitution is allowed, priced inversely to how sure the
+ * engine was. There is no threshold to tune: the cost simply runs away as
+ * confidence rises, and at full confidence it is impossible.
+ *
+ *   0%  ->  0.50   affordable for any query of 2 characters or more
+ *   50% ->  1.00   affordable only for a long tag with a lot else corroborating
+ *   87% ->  3.85   never affordable
+ *  100% ->  never
+ *
+ * The self-limiting part matters: this can only ever be spent where the engine
+ * already admitted defeat, which on a real sheet is a small number of places.
+ */
+const UNKNOWN_BASE = 0.5;
+
+function unknownCost(conf) {
+  if (!(conf >= 0) || conf >= 1) return Infinity;
+  return UNKNOWN_BASE / (1 - conf);
+}
+
 // "Two glyphs OCR genuinely cannot tell apart" — tier 1 only. The wider tiers
 // are a weaker claim (confusable *once degraded*), and conflating them would
 // make this predicate mean less than it says.
@@ -230,20 +258,22 @@ function admissible(hayCodes, c) {
  * and this answers those in O(n*m) with an early abort, instead of paying for
  * the full alignment. The alignment below only runs when this finds nothing.
  */
-function substitutionScan(hayCodes, c) {
+function substitutionScan(hayCodes, c, conf) {
   const n = c.codes.length, m = hayCodes.length;
   if (n > m) return null;
   let best = null;
   for (let start = 0; start + n <= m; start++) {
-    let cost = 0, subs = 0, ok = true;
+    let cost = 0, subs = 0, unknowns = 0, ok = true;
     for (let k = 0; k < n; k++) {
       const a = hayCodes[start + k], b = c.codes[k];
       if (a === b) continue;
-      cost += costOf(a, b); subs++;
+      let sc = costOf(a, b);
+      if (sc === Infinity && conf) { sc = unknownCost(conf[start + k]); unknowns++; }
+      cost += sc; subs++;
       if (cost > c.budget) { ok = false; break; }
     }
     if (ok && (!best || cost < best.cost)) {
-      best = { pos: start, len: n, cost, subs, indels: 0 };
+      best = { pos: start, len: n, cost, subs, unknowns, indels: 0 };
       if (cost === 0) break;
     }
   }
@@ -298,6 +328,13 @@ function rowScratch(size) {
  */
 function confusableMatch(hay, needle, opts) {
   const allowIndels = !opts || opts.allowIndels !== false;
+  // Per-character confidence for `hay`, 0..1. Absent means "fully trusted",
+  // which is the right default for a real PDF text layer: those characters are
+  // not a guess, so an unlisted substitution stays impossible.
+  const conf = (opts && opts.conf) || null;
+  const subCost = conf
+    ? (a, b, j) => { const s = costOf(a, b); return s === Infinity ? unknownCost(conf[j]) : s; }
+    : (a, b) => costOf(a, b);
   const c = typeof needle === 'string' ? compileConfusable(needle) : needle;
   const n = c.needle.length, m = hay.length;
   const { budget, maxIndels } = c;
@@ -305,7 +342,7 @@ function confusableMatch(hay, needle, opts) {
   if (n > m + maxIndels) return null;
 
   const hayCodes = encode(hay);
-  const quick = substitutionScan(hayCodes, c);
+  const quick = substitutionScan(hayCodes, c, conf);
   if (quick) return quick;
   // The alignment costs roughly ten times what the scan above does. A search
   // that is already finding things doesn't need it, so callers can ask for the
@@ -351,7 +388,7 @@ function confusableMatch(hay, needle, opts) {
               if (from < bestFrom) { bestFrom = from; bestPs = ps; }
             }
             if (bestFrom !== Infinity) {
-              const cost = bestFrom + costOf(hayCodes[j - 1], nc);
+              const cost = bestFrom + subCost(hayCodes[j - 1], nc, j - 1);
               const dst = at(j, k, 0);
               if (cost <= budget && cost < cur[dst]) {
                 cur[dst] = cost;

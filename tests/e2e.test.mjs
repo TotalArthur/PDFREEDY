@@ -119,6 +119,7 @@ async function search(tag, opts = {}) {
   return page.$$eval('#resultsList .result-item', els => els.map(e => ({
     text: e.querySelector('.result-text')?.textContent || '',
     badges: [...e.querySelectorAll('.badge')].map(b => b.textContent),
+    reasons: [...e.querySelectorAll('.result-why li')].map(li => li.textContent),
   })));
 }
 const bandsShown = () => page.$$eval('#resultsList .band-head',
@@ -142,9 +143,11 @@ check('a different tag does not match (precision)', (await search('PT-11005')).l
 
 // ---- confidence banding -------------------------------------------------
 {
-  await search('PT-11004');
+  const r = await search('PT-11004');
   check('an exact hit sits under Matches', (await bandsShown()).includes('band-confirmed'),
     JSON.stringify(await bandsShown()));
+  check('and the row says why it is a match',
+    r[0]?.reasons.some(x => /Matched exactly/.test(x)), JSON.stringify(r[0]?.reasons));
 }
 {
   await search('V-6801-15PW4/3-750-PP60-RE1');
@@ -156,6 +159,8 @@ check('a different tag does not match (precision)', (await search('PT-11005')).l
   // pass, so the search escalates to allow the erased I — and says so.
   const r = await search('FIC-2015');
   check('a tag with a character erased is still found', r.length === 1, JSON.stringify(r));
+  check('and the row says a character is missing',
+    r[0]?.reasons.some(x => /missing from the read/.test(x)), JSON.stringify(r[0]?.reasons));
   check('and is filed under Possible, not presented as a match',
     (await bandsShown()).includes('band-possible'), JSON.stringify(await bandsShown()));
   const summary = await page.textContent('#searchSummary');

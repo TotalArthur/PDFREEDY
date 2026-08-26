@@ -240,6 +240,13 @@
   }
   .band-collapse[open] > summary .band-head::after { content: '▾'; }
 
+  .result-why {
+    margin: 5px 0 0; padding: 0 0 0 13px;
+    color: var(--text-dim); font-size: 11.5px; line-height: 1.45;
+  }
+  .result-why li { margin: 1px 0; }
+  .result-why li::marker { color: #4f6b8a; }
+
   .empty-note { color: var(--text-dim); font-size: 12.5px; padding: 10px 6px; line-height: 1.5; }
   #correctionsBar {
     font-size: 11px; color: var(--text-dim); padding: 6px 14px;
@@ -500,22 +507,20 @@
   function clamp(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v));
   }
-  function levenshtein(a, b) {
-    if (a === b) return 0;
-    const al = a.length, bl = b.length;
-    if (al === 0) return bl;
-    if (bl === 0) return al;
-    let prev = new Array(bl + 1);
-    for (let j = 0; j <= bl; j++) prev[j] = j;
-    for (let i = 1; i <= al; i++) {
-      const cur = [i];
-      for (let j = 1; j <= bl; j++) {
-        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+  function rawSpan(text, pos, len) {
+    if (typeof pos !== "number" || !len) return null;
+    let start = -1, end = -1, kept = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (!/[A-Za-z0-9]/.test(text[i])) continue;
+      if (kept === pos) start = i;
+      if (kept === pos + len - 1) {
+        end = i + 1;
+        break;
       }
-      prev = cur;
+      kept++;
     }
-    return prev[bl];
+    if (start === -1) return null;
+    return { start, end: end === -1 ? text.length : end };
   }
   function escapeHtml(s) {
     return (s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -559,6 +564,50 @@
     corrections.clear();
     saveCorrections();
     updateCorrectionsBar();
+  }
+
+  // src/lib/evidence.js
+  var CONTEXT_SATURATION = 8;
+  function scoreResult(res) {
+    const len = res.matchLen || 1;
+    const subs = res.subs || 0;
+    const unknowns = res.unknowns || 0;
+    const indels = res.indels || 0;
+    const contextChars = res.contextChars || 0;
+    const contextConf = typeof res.contextConf === "number" ? res.contextConf : 1;
+    const exactness = Math.max(0, (len - subs - indels) / len);
+    const context = Math.min(1, contextChars / CONTEXT_SATURATION) * contextConf;
+    const score = 2 * exactness + 1.2 * context + 0.4 * (res.delimited ? 1 : 0) + 0.6 * (res.source === "text" ? 1 : 0) + 0.8 * (res.corrected ? 1 : 0) - 1 * Math.min(1, res.cost || 0) - 0.5 * indels - 0.3 * (res.fuzzy ? 1 : 0);
+    return { score, reasons: reasonsFor(res, { exactness, contextChars, contextConf }) };
+  }
+  function reasonsFor(res, d) {
+    const out = [];
+    const len = res.matchLen || 0;
+    const differing = (res.subs || 0) + (res.indels || 0);
+    if (res.corrected) {
+      out.push("You confirmed this one earlier.");
+    } else if (!differing) {
+      out.push(res.source === "text" ? "Matched exactly, in the PDF\u2019s own text." : "Matched exactly.");
+    } else {
+      out.push(`${len - differing} of ${len} characters matched exactly.`);
+    }
+    if (res.unknowns > 0) {
+      const pct = Math.round((res.matchConf ?? 0) * 100);
+      out.push(res.unknowns === 1 ? `The one that differs was read at ${pct}% confidence \u2014 OCR could not make it out.` : `${res.unknowns} of them were unreadable (${pct}% confidence).`);
+    } else if (differing > (res.indels || 0)) {
+      out.push("The rest differ only by characters that render identically at drawing scale.");
+    }
+    if (res.indels > 0) {
+      out.push(res.indels === 1 ? "One character appears to be missing from the read entirely." : `${res.indels} characters appear to be missing from the read.`);
+    }
+    if (d.contextChars >= 3) {
+      out.push(`Surrounded by ${d.contextChars} characters of text that read at ${Math.round(d.contextConf * 100)}% confidence.`);
+    } else if (d.contextChars === 0) {
+      out.push("Nothing around it corroborates it.");
+    }
+    if (res.delimited && d.contextChars >= 3) out.push("It occupies a whole field, between separators.");
+    if (res.fuzzy) out.push("Found only by disregarding what OCR reported \u2014 treat with suspicion.");
+    return out;
   }
 
   // src/lib/confusion.js
@@ -633,6 +682,11 @@
     if (a === b) return 0;
     if (a < 0 || b < 0) return Infinity;
     return COST_TABLE[a * A + b];
+  }
+  var UNKNOWN_BASE = 0.5;
+  function unknownCost(conf) {
+    if (!(conf >= 0) || conf >= 1) return Infinity;
+    return UNKNOWN_BASE / (1 - conf);
   }
   var INDEL_COST = 0.8;
   function indelAllowance(len) {
@@ -715,16 +769,21 @@
     }
     return true;
   }
-  function substitutionScan(hayCodes, c) {
+  function substitutionScan(hayCodes, c, conf) {
     const n = c.codes.length, m = hayCodes.length;
     if (n > m) return null;
     let best = null;
     for (let start = 0; start + n <= m; start++) {
-      let cost = 0, subs = 0, ok = true;
+      let cost = 0, subs = 0, unknowns = 0, ok = true;
       for (let k = 0; k < n; k++) {
         const a = hayCodes[start + k], b = c.codes[k];
         if (a === b) continue;
-        cost += costOf(a, b);
+        let sc = costOf(a, b);
+        if (sc === Infinity && conf) {
+          sc = unknownCost(conf[start + k]);
+          unknowns++;
+        }
+        cost += sc;
         subs++;
         if (cost > c.budget) {
           ok = false;
@@ -732,7 +791,7 @@
         }
       }
       if (ok && (!best || cost < best.cost)) {
-        best = { pos: start, len: n, cost, subs, indels: 0 };
+        best = { pos: start, len: n, cost, subs, unknowns, indels: 0 };
         if (cost === 0) break;
       }
     }
@@ -754,13 +813,18 @@
   }
   function confusableMatch(hay, needle, opts) {
     const allowIndels = !opts || opts.allowIndels !== false;
+    const conf = opts && opts.conf || null;
+    const subCost = conf ? (a, b, j) => {
+      const s = costOf(a, b);
+      return s === Infinity ? unknownCost(conf[j]) : s;
+    } : (a, b) => costOf(a, b);
     const c = typeof needle === "string" ? compileConfusable(needle) : needle;
     const n = c.needle.length, m = hay.length;
     const { budget, maxIndels } = c;
     if (!n || budget === 0) return null;
     if (n > m + maxIndels) return null;
     const hayCodes = encode(hay);
-    const quick = substitutionScan(hayCodes, c);
+    const quick = substitutionScan(hayCodes, c, conf);
     if (quick) return quick;
     if (!allowIndels || maxIndels === 0) return null;
     if (!admissible(hayCodes, c)) return null;
@@ -795,7 +859,7 @@
                 }
               }
               if (bestFrom !== Infinity) {
-                const cost = bestFrom + costOf(hayCodes[j - 1], nc);
+                const cost = bestFrom + subCost(hayCodes[j - 1], nc, j - 1);
                 const dst = at(j, k, 0);
                 if (cost <= budget && cost < cur[dst]) {
                   cur[dst] = cost;
@@ -865,7 +929,25 @@
   }
 
   // src/lib/matching.js
-  function matchWindow(norm, query) {
+  var FUZZY_CONFIDENCE_CAP = 0.45;
+  function describe(hit, fuzzy) {
+    return {
+      pos: hit.pos,
+      len: hit.len,
+      confused: hit.cost > 0,
+      fuzzy,
+      cost: hit.cost,
+      subs: hit.subs,
+      unknowns: hit.unknowns || 0,
+      indels: hit.indels
+    };
+  }
+  function capConfidence(conf, len, cap) {
+    const out = new Float64Array(len).fill(cap);
+    if (conf) for (let i = 0; i < len && i < conf.length; i++) out[i] = Math.min(conf[i], cap);
+    return out;
+  }
+  function matchWindow(norm, query, opts) {
     if (!norm || !query.norm) return null;
     const q = query.norm;
     if (query._compiled !== q) {
@@ -873,56 +955,42 @@
       query._needle = compileConfusable(q);
     }
     const needle = query._needle;
+    const conf = opts && opts.conf || null;
     if (query.exact) {
-      if (norm === q) return { pos: 0, len: norm.length, confused: false, fuzzy: false, cost: 0, subs: 0, indels: 0 };
-      const hit2 = confusableMatch(norm, needle, query);
+      if (norm === q) {
+        return { pos: 0, len: norm.length, confused: false, fuzzy: false, cost: 0, subs: 0, unknowns: 0, indels: 0 };
+      }
+      const hit2 = confusableMatch(norm, needle, { allowIndels: query.allowIndels, conf });
       if (hit2 && hit2.pos === 0 && hit2.len === norm.length) {
-        return {
-          pos: 0,
-          len: norm.length,
-          confused: hit2.cost > 0,
-          fuzzy: false,
-          cost: hit2.cost,
-          subs: hit2.subs,
-          indels: hit2.indels
-        };
+        return { ...describe(hit2, false), pos: 0, len: norm.length };
       }
       return null;
     }
     const exactPos = norm.indexOf(q);
     if (exactPos !== -1) {
-      return { pos: exactPos, len: q.length, confused: false, fuzzy: false, cost: 0, subs: 0, indels: 0 };
+      return { pos: exactPos, len: q.length, confused: false, fuzzy: false, cost: 0, subs: 0, unknowns: 0, indels: 0 };
     }
-    const hit = confusableMatch(norm, needle, query);
-    if (hit) {
-      return {
-        pos: hit.pos,
-        len: hit.len,
-        confused: true,
-        fuzzy: false,
-        cost: hit.cost,
-        subs: hit.subs,
-        indels: hit.indels
-      };
-    }
+    const hit = confusableMatch(norm, needle, { allowIndels: query.allowIndels, conf });
+    if (hit) return describe(hit, false);
     if (query.fuzzy) {
-      const maxDist = q.length <= 4 ? 1 : 2;
-      if (Math.abs(norm.length - q.length) <= maxDist && levenshtein(norm, q) <= maxDist) {
-        return {
-          pos: 0,
-          len: norm.length,
-          confused: false,
-          fuzzy: true,
-          cost: maxDist,
-          subs: maxDist,
-          indels: 0
-        };
-      }
+      const loose = confusableMatch(norm, needle, {
+        allowIndels: true,
+        conf: capConfidence(conf, norm.length, FUZZY_CONFIDENCE_CAP)
+      });
+      if (loose) return describe(loose, true);
     }
     return null;
   }
 
   // src/lib/windows.js
+  function windowConfidence(win) {
+    const out = [];
+    for (const it of win) {
+      const c = typeof it.conf === "number" ? it.conf : 1;
+      for (const ch of it.text) if (/[A-Za-z0-9]/.test(ch)) out.push(c);
+    }
+    return Float64Array.from(out);
+  }
   function findWindowMatches(items, query, opts) {
     const { maxWindow, gapFactor, join = "", transform = null } = opts;
     const results = [];
@@ -947,10 +1015,52 @@
         const text = fixed || rawText;
         const norm = normalize(text);
         if (!norm) continue;
-        const match = matchWindow(norm, query);
+        const confidence = fixed ? new Float64Array(norm.length).fill(1) : windowConfidence(win);
+        const match = matchWindow(norm, query, { conf: fixed ? null : confidence });
         if (!match) continue;
+        const span = rawSpan(text, match.pos, match.len);
+        const isAlnum = (ch) => ch !== void 0 && /[A-Za-z0-9]/.test(ch);
+        let ctxChars = 0, ctxConfSum = 0;
+        const addContext = (str, c) => {
+          for (const ch of str) if (/[A-Za-z0-9]/.test(ch)) {
+            ctxChars++;
+            ctxConfSum += c;
+          }
+        };
+        let matchConfSum = 0, matchChars = 0;
+        for (let i = 0; i < confidence.length; i++) {
+          if (i >= match.pos && i < match.pos + match.len) {
+            matchConfSum += confidence[i];
+            matchChars++;
+          } else {
+            ctxChars++;
+            ctxConfSum += confidence[i];
+          }
+        }
+        for (let i = start - 1; i >= 0; i--) {
+          const gap = items[i + 1].rs - items[i].re;
+          if (gap > items[i].rh * gapFactor) break;
+          addContext(items[i].text, typeof items[i].conf === "number" ? items[i].conf : 1);
+        }
+        for (let i = start + winSize; i < items.length; i++) {
+          const gap = items[i].rs - items[i - 1].re;
+          if (gap > items[i - 1].rh * gapFactor) break;
+          addContext(items[i].text, typeof items[i].conf === "number" ? items[i].conf : 1);
+        }
         win.forEach((it) => covered.add(it.key));
-        results.push({ items: win, text, rawText, corrected: !!fixed, match });
+        results.push({
+          items: win,
+          text,
+          rawText,
+          corrected: !!fixed,
+          match,
+          contextChars: ctxChars,
+          contextConf: ctxChars ? ctxConfSum / ctxChars : 1,
+          matchConf: matchChars ? matchConfSum / matchChars : 1,
+          // True when the match occupies a whole field rather than part of one —
+          // -58134- reads as a tag; the 58134 inside 158134X does not.
+          delimited: !!span && !isAlnum(text[span.start - 1]) && !isAlnum(text[span.end])
+        });
       }
     }
     return results;
@@ -1258,7 +1368,15 @@
     if (!data || !data.ocrLines) return [];
     const results = [];
     for (const line of data.ocrLines) {
-      const items = line.words.map((w, i) => ({ key: i, text: w.text, rs: w.rs, re: w.re, rh: w.rh, word: w }));
+      const items = line.words.map((w, i) => ({
+        key: i,
+        text: w.text,
+        rs: w.rs,
+        re: w.re,
+        rh: w.rh,
+        conf: Math.max(0, Math.min(1, (w.confidence || 0) / 100)),
+        word: w
+      }));
       for (const hit of findWindowMatches(items, query, {
         maxWindow: MAX_WINDOW,
         gapFactor: JOIN_GAP_FACTOR,
@@ -1282,7 +1400,12 @@
           matchLen: hit.match.len,
           cost: hit.match.cost,
           subs: hit.match.subs,
-          indels: hit.match.indels
+          indels: hit.match.indels,
+          unknowns: hit.match.unknowns,
+          contextChars: hit.contextChars,
+          contextConf: hit.contextConf,
+          matchConf: hit.matchConf,
+          delimited: hit.delimited
         });
       }
     }
@@ -1444,12 +1567,13 @@
   var BAND_NOTE = {
     confirmed: "",
     likely: "Matched through characters that render identically at drawing scale (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z).",
-    possible: "Matched only by allowing heavier damage \u2014 a substitution that needs a soft image to explain, or a character OCR lost entirely. Verify against the crop before using these."
+    possible: "Matched across something OCR could not read, or could only read as a different character. Often right \u2014 it is how a tag under a smudge gets found at all \u2014 but check each against its crop. The notes under each row say what the evidence is."
   };
   var T1_COST = 0.12;
   function bandOf(res) {
     if (res.fuzzy) return "possible";
     if (res.indels > 0) return "possible";
+    if (res.unknowns > 0) return "possible";
     if (!res.cost) return "confirmed";
     if (typeof res.subs !== "number") return "possible";
     return res.cost <= res.subs * T1_COST + 1e-9 ? "likely" : "possible";
@@ -1489,20 +1613,29 @@
     textEl.className = "result-text";
     textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
     meta.appendChild(textEl);
-    if (res.source === "ocr") {
-      if (res.corrected) {
-        const rawEl = document.createElement("div");
-        rawEl.className = "result-raw";
-        rawEl.textContent = "OCR read: " + res.rawText;
-        meta.appendChild(rawEl);
+    if (res.source === "ocr" && res.corrected) {
+      const rawEl = document.createElement("div");
+      rawEl.className = "result-raw";
+      rawEl.textContent = "OCR read: " + res.rawText;
+      meta.appendChild(rawEl);
+    }
+    if (res.reasons && res.reasons.length) {
+      const why = document.createElement("ul");
+      why.className = "result-why";
+      for (const line of res.reasons) {
+        const li = document.createElement("li");
+        li.textContent = line;
+        why.appendChild(li);
       }
+      meta.appendChild(why);
+    }
+    if (res.source === "ocr") {
       const conf = document.createElement("div");
       conf.className = "result-conf";
-      conf.textContent = res.corrected ? "Confirmed by you (OCR read it at " + Math.round(res.confidence) + "%)" : "OCR confidence: " + Math.round(res.confidence) + "% \u2014 low confidence doesn\u2019t mean wrong; check the crop";
+      conf.textContent = "OCR was " + Math.round(res.confidence) + "% sure of this read overall.";
       meta.appendChild(conf);
     }
     el.appendChild(meta);
-    el.addEventListener("click", () => jumpToResult(i));
     el.addEventListener("click", () => jumpToResult(i));
     return el;
   }
@@ -2096,7 +2229,12 @@
           matchLen: hit.match.len,
           cost: hit.match.cost,
           subs: hit.match.subs,
-          indels: hit.match.indels
+          indels: hit.match.indels,
+          unknowns: hit.match.unknowns,
+          contextChars: hit.contextChars,
+          contextConf: hit.contextConf,
+          matchConf: hit.matchConf,
+          delimited: hit.delimited
         });
       }
     }
@@ -2121,6 +2259,14 @@
     }
     return pages;
   }
+  function rank(results) {
+    for (const r of results) {
+      const { score, reasons } = scoreResult(r);
+      r.score = score;
+      r.reasons = reasons;
+    }
+    return results.sort((a, b) => b.score - a.score || a.page - b.page);
+  }
   function runFullSearch() {
     const raw = searchInput.value.trim();
     S.currentQuery = {
@@ -2143,7 +2289,7 @@
     const collect = () => {
       const out = [];
       for (const p of pages) out.push(...searchPage(p, S.currentQuery));
-      return out;
+      return rank(out);
     };
     S.lastResults = collect();
     if (!S.lastResults.length) {
@@ -2161,8 +2307,8 @@
   function mergeFreshResults(pageNum, fresh) {
     if (!fresh.length && !S.lastResults.some((r) => r.page === pageNum)) return;
     S.lastResults = S.lastResults.filter((r) => r.page !== pageNum);
-    S.lastResults.push(...fresh);
-    S.lastResults.sort((a, b) => a.page - b.page);
+    S.lastResults.push(...rank(fresh));
+    rank(S.lastResults);
     renderResultsList();
     updateSearchSummary();
     if (pageNum === S.currentPage) drawHighlights();

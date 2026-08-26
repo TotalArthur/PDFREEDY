@@ -1,4 +1,5 @@
 import { S } from './state.js';
+import { scoreResult } from '../lib/evidence.js';
 import { normalize } from '../lib/text.js';
 import { searchTextLayer } from './textlayer.js';
 import { searchOcr } from './ocr.js';
@@ -38,6 +39,22 @@ function searchablePages() {
   return pages;
 }
 
+/*
+ * Order by how well each hit is evidenced, not by where it happens to sit in
+ * the document.
+ *
+ * Page order put an 87%-confident wrong answer above a corroborated right one,
+ * which is how a genuine find ended up looking like one guess among three.
+ */
+function rank(results) {
+  for (const r of results) {
+    const { score, reasons } = scoreResult(r);
+    r.score = score;
+    r.reasons = reasons;
+  }
+  return results.sort((a, b) => (b.score - a.score) || (a.page - b.page));
+}
+
 function runFullSearch() {
   const raw = searchInput.value.trim();
   S.currentQuery = {
@@ -59,7 +76,7 @@ function runFullSearch() {
   const collect = () => {
     const out = [];
     for (const p of pages) out.push(...searchPage(p, S.currentQuery));
-    return out;
+    return rank(out);
   };
 
   S.lastResults = collect();
@@ -85,8 +102,8 @@ function runFullSearch() {
 function mergeFreshResults(pageNum, fresh) {
   if (!fresh.length && !S.lastResults.some(r => r.page === pageNum)) return;
   S.lastResults = S.lastResults.filter(r => r.page !== pageNum);
-  S.lastResults.push(...fresh);
-  S.lastResults.sort((a,b) => a.page - b.page);
+  S.lastResults.push(...rank(fresh));
+  rank(S.lastResults);
   renderResultsList();
   updateSearchSummary();
   if (pageNum === S.currentPage) drawHighlights();

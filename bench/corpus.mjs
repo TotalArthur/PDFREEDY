@@ -48,4 +48,24 @@ export const CONDITIONS = [
   { name: 'lit-28px',     height: 28, blur: 0,   noise: 0,  uneven: 0.55 },
   { name: 'lit-14px',     height: 14, blur: 0.4, noise: 10, uneven: 0.55 },
   { name: 'lit-soft-14',  height: 14, blur: 1.0, noise: 20, uneven: 0.6  },
+
+  // A tag inside a line number, with only the tag field smudged. This is the
+  // shape of the failure that motivated confidence-aware matching: the field
+  // comes back unreadable while everything either side reads cleanly, so the
+  // question is not "what do these marks look like" but "how much should an
+  // admission of ignorance count against a match". Every other condition here
+  // degrades the whole string equally and cannot see that distinction.
+  // Calibrated by sweeping the smudge until OCR lands in the interesting band:
+  // hard enough to garble the field, not so hard that it returns nothing. Too
+  // gentle and it reads the tag perfectly (which tests nothing); too harsh and
+  // it returns empty (which no matcher can fix).
+  { name: 'field-14',     height: 14, context: true, blur: 0.3, noise: 8,  fieldBlur: 1.0, fieldNoise: 35 },
+  { name: 'field-soft-14',height: 14, context: true, blur: 0.5, noise: 12, fieldBlur: 1.4, fieldNoise: 45 },
+  { name: 'field-11',     height: 11, context: true, blur: 0.3, noise: 8,  fieldBlur: 0.9, fieldNoise: 40 },
+  // In this one OCR marks the character it can't read with a junk symbol —
+  // 18-6-MC-58134-1C3B1 comes back as "18-6-MC-5#134-1C3B1" at 12% confidence.
+  // Currently unfindable, and not for the reason it looks like: normalize()
+  // deletes the '#', so the tag becomes one character SHORTER rather than one
+  // character wrong. See bench/README.md.
+  { name: 'field-junk-16',height: 16, context: true, blur: 0.3, noise: 8,  fieldBlur: 1.4, fieldNoise: 40 },
 ];
