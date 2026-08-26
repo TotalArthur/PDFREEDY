@@ -3,7 +3,7 @@ import { extractTextLayer } from './textlayer.js';
 import { runOcrForPage } from './ocr.js';
 import { updatePageBadge, drawHighlights } from './viewer.js';
 import { searchPage, mergeFreshResults, runFullSearch, setSearchEnabled, updateSearchSummary } from './search.js';
-import { ROTATIONS } from './config.js';
+import { ROTATIONS, OCR_POOL_SIZE } from './config.js';
 import {
   procDetailText,
   procSpinner,
@@ -16,7 +16,8 @@ import {
 } from './dom.js';
 
 // =======================================================================
-// Background processing queue: current page first, then in page order.
+// Background processing queue: current page first, then in page order —
+// up to OCR_POOL_SIZE pages worked concurrently (see runQueue below).
 // =======================================================================
 
 function startBackgroundProcessing() {
@@ -32,21 +33,44 @@ function startBackgroundProcessing() {
   runQueue(epoch);
 }
 
-async function runQueue(epoch) {
-  while (!S.processingCancelled && epoch === S.docEpoch) {
-    let target = null;
-    const cd = S.pageData.get(S.currentPage);
-    if (cd && cd.status === 'pending') target = S.currentPage;
-    if (target === null) {
-      for (let p = 1; p <= S.numPages; p++) {
-        const d = S.pageData.get(p);
-        if (d && d.status === 'pending') { target = p; break; }
-      }
-    }
-    if (target === null) break;
-    await processPage(target, epoch);
-    await new Promise(r => setTimeout(r, 0)); // yield to keep UI responsive
+// Up to OCR_POOL_SIZE pages are worked at once — each processPage() call
+// eventually hands its recognize() calls to the shared scheduler (see
+// ocr.js), so running several pages concurrently is what actually keeps
+// every worker in the pool fed. Any fewer and most of the pool sits idle
+// while a single page's text extraction or image conditioning (both
+// main-thread, pre-OCR steps) runs; any more just queues extra scheduler
+// jobs behind the same OCR_POOL_SIZE workers for no benefit.
+function nextPendingPage() {
+  const cd = S.pageData.get(S.currentPage);
+  if (cd && cd.status === 'pending') return S.currentPage;
+  for (let p = 1; p <= S.numPages; p++) {
+    const d = S.pageData.get(p);
+    if (d && d.status === 'pending') return p;
   }
+  return null;
+}
+
+async function runQueue(epoch) {
+  const concurrency = Math.max(1, OCR_POOL_SIZE);
+  const inFlight = new Set();
+
+  while (!S.processingCancelled && epoch === S.docEpoch) {
+    while (inFlight.size < concurrency) {
+      const target = nextPendingPage();
+      if (target === null) break;
+      // processPage() flips the page's status off 'pending' synchronously,
+      // before its first await — so the next nextPendingPage() call in this
+      // same synchronous loop never re-claims the page it just handed out.
+      const task = processPage(target, epoch);
+      task.finally(() => inFlight.delete(task));
+      inFlight.add(task);
+    }
+    if (inFlight.size === 0) break; // nothing pending and nothing running
+    await Promise.race(inFlight);
+  }
+  // Let whatever is already running finish before touching shared UI state —
+  // cancelling stops new pages from starting, not the ones already mid-read.
+  await Promise.allSettled(inFlight);
   // A queue from a superseded document must not touch the current one's UI.
   if (epoch !== S.docEpoch) return;
   S.isBackgroundRunning = false;
@@ -85,7 +109,9 @@ async function processPage(pageNum, epoch) {
     data.status = 'ocr-running';
     data.ocrPassNum = 0;
     data.stepStartedAt = Date.now();
-    S.skipCurrentPageRequested = false;
+    // Skip is tracked per page, not globally — several pages can be mid-OCR
+    // at once, and clicking "skip" is only ever meant for the one on screen.
+    data.skipRequested = false;
     if (pageNum === S.currentPage) { skipPageBtn.disabled = false; updatePageBadge(); }
     try {
       await runOcrForPage(pageNum, (pass, of) => {
@@ -95,12 +121,11 @@ async function processPage(pageNum, epoch) {
         data.stepStartedAt = Date.now();
         updateProcSummary();
       });
-      data.status = S.skipCurrentPageRequested ? 'skipped' : 'ocr-done';
+      data.status = data.skipRequested ? 'skipped' : 'ocr-done';
     } catch (err) {
       console.error('OCR failed on page', pageNum, err);
       data.status = 'error';
     }
-    S.skipCurrentPageRequested = false;
     if (epoch !== S.docEpoch) return;
     if (pageNum === S.currentPage) skipPageBtn.disabled = true;
   }
@@ -179,10 +204,17 @@ function hideViewerLoading() {
   viewerLoading.classList.remove('visible');
 }
 
-skipPageBtn.addEventListener('click', () => { S.skipCurrentPageRequested = true; });
+skipPageBtn.addEventListener('click', () => {
+  const d = S.pageData.get(S.currentPage);
+  if (d) d.skipRequested = true;
+});
 cancelProcBtn.addEventListener('click', () => {
   S.processingCancelled = true;
-  S.skipCurrentPageRequested = true;
+  // Marks every page still in flight, not just the current one — several can
+  // be mid-OCR at once with the pool, and cancel means all of them.
+  for (const d of S.pageData.values()) {
+    if (d.status === 'ocr-running') d.skipRequested = true;
+  }
   cancelProcBtn.disabled = true;
 });
 

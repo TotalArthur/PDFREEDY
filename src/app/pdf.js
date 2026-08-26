@@ -114,13 +114,13 @@ function resetDocumentState() {
   S.pdfDoc = null; S.numPages = 0; S.currentPage = 1; S.scale = 1.5;
   S.pageProxyCache.clear(); S.pageData.clear();
   S.lastResults = []; S.activeResultIndex = -1;
-  S.processingCancelled = true; S.skipCurrentPageRequested = false; S.isBackgroundRunning = false;
+  S.processingCancelled = true; S.isBackgroundRunning = false;
   if (S.currentRenderTask) {
     try { S.currentRenderTask.cancel(); } catch (err) { /* already finished */ }
     S.currentRenderTask = null;
   }
   if (S.tickerHandle) { clearInterval(S.tickerHandle); S.tickerHandle = null; }
-  if (S.ocrWorker) { S.ocrWorker.terminate().catch(()=>{}); S.ocrWorker = null; }
+  if (S.ocrScheduler) { S.ocrScheduler.terminate().catch(()=>{}); S.ocrScheduler = null; }
   resultsList.innerHTML = '<div class="empty-note">Load a PDF and run a search to see matches here.</div>';
   resultsCount.textContent = 'Results';
   searchSummary.textContent = '';
