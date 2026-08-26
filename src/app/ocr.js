@@ -2,7 +2,7 @@ import { S } from './state.js';
 import { findWindowMatches } from '../lib/windows.js';
 import { conditionForOcr, rotateCanvas } from '../lib/preprocess.js';
 import { mapBoxBack, readingAxis, boundsOfPoints } from '../lib/geometry.js';
-import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, TESSERACT_INIT, tesseractParams } from './config.js';
+import { OCR_SCALE, JOIN_GAP_FACTOR, MAX_WINDOW, ROTATIONS, TESSERACT_INIT, tesseractParams } from './config.js';
 import { getPageProxy } from './pdf.js';
 import { getCorrection } from './corrections.js';
 import {
@@ -27,6 +27,17 @@ async function ensureOcrWorker() {
 async function runOcrForPage(pageNum, onProgress) {
   const epoch = S.docEpoch;
   const data = S.pageData.get(pageNum);
+
+  // Landscape-only by default: a single pass at the page's native orientation
+  // is ~4x faster. "Also scan rotated/vertical text" opts into the rest for
+  // drawings with vertical line labels, at that time cost. Only the passes this
+  // page hasn't already had are run, so ticking the box after a document has
+  // been read costs the three missing rotations and not a re-read.
+  const wanted = rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1);
+  const alreadyRun = data.ocrRotations || [];
+  const rotations = wanted.filter(deg => !alreadyRun.includes(deg));
+  if (!rotations.length) return data;
+
   const page = await getPageProxy(pageNum);
   const viewport = page.getViewport({ scale: OCR_SCALE });
 
@@ -47,11 +58,8 @@ async function runOcrForPage(pageNum, onProgress) {
   const ocrBase = conditionForOcr(base);
 
   const W = base.width, H = base.height;
-  // Landscape-only by default: a single pass at the page's native orientation
-  // is ~4x faster. "Also scan rotated/vertical text" opts back into the full
-  // 4-pass sweep for drawings with vertical line labels, at that time cost.
-  const rotations = rotatedTextToggle.checked ? [0, 90, 180, 270] : [0];
   const allWords = [];   // flattened, coordinates already mapped back to C0 space
+  const completed = [];  // rotations that actually finished, so a cancelled pass is retried
   const worker = await ensureOcrWorker();
 
   for (let i = 0; i < rotations.length; i++) {
@@ -89,9 +97,14 @@ async function runOcrForPage(pageNum, onProgress) {
         allWords.push({ rotation: deg, words: mappedWords });
       }
     }
+    completed.push(deg);
   }
 
-  data.ocrLines = allWords; // array of { rotation, words:[{text,bbox,confidence,rotation}] }
+  // Appended, not replaced: a top-up run only holds the rotations that were
+  // missing, and the words from the earlier pass are still good.
+  // array of { rotation, words:[{text,bbox,confidence,rotation}] }
+  data.ocrLines = (data.ocrLines || []).concat(allWords);
+  data.ocrRotations = alreadyRun.concat(completed);
   return data;
 }
 
@@ -101,6 +114,10 @@ function searchOcr(pageNum, query) {
   const results = [];
 
   for (const line of data.ocrLines) {
+    // Words read in a rotated pass are kept once found, but they are only
+    // searched while the box that asked for them is ticked — otherwise
+    // unticking it would leave results on screen that it can't explain.
+    if (line.rotation !== 0 && !rotatedTextToggle.checked) continue;
     // rs/re/rh are already on each word from readingAxis(), so vertical and
     // upside-down passes join and order exactly like horizontal ones.
     const items = line.words.map((w, i) => ({ key: i, text: w.text, rs: w.rs, re: w.re, rh: w.rh, word: w }));
@@ -117,6 +134,7 @@ function searchOcr(pageNum, query) {
         corrected: hit.corrected,
         bbox: { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY },
         confidence: avgConf,
+        whole: hit.match.whole,
         fuzzy: hit.match.fuzzy, confused: hit.match.confused,
         matchPos: hit.match.pos, matchLen: hit.match.len,
         cost: hit.match.cost, subs: hit.match.subs, indels: hit.match.indels

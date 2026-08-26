@@ -98,6 +98,8 @@ await page.waitForFunction(() => typeof window.pdfjsLib !== 'undefined');
 
 check('page loaded with no script errors', errors.length === 0, errors.join(' | '));
 check('search box starts disabled', await page.isDisabled('#searchInput'));
+check('both match tiers start ticked',
+  await page.isChecked('#exactToggle') && await page.isChecked('#fuzzyToggle'));
 
 await page.setInputFiles('#fileInput', pdfPath);
 await page.waitForFunction(
@@ -110,9 +112,19 @@ await page.waitForFunction(
   () => document.querySelector('#procDetailText').textContent.includes('Processed 2 / 2'),
   null, { timeout: 30000 });
 check('both pages processed via the text layer', true);
+check('the status line says the run is finished, not just how far it got',
+  (await page.textContent('#procDetailText')).includes('done, ready to search'),
+  await page.textContent('#procDetailText'));
+check('the loading cover is off the drawing once reading is done',
+  !(await page.isVisible('#viewerLoading')));
+check('search opens once every page has been read', await page.isEnabled('#searchInput'));
 
-async function search(tag, opts = {}) {
-  if (opts.exact) await page.check('#exactToggle'); else await page.uncheck('#exactToggle');
+// Both tiers ship ticked, which is what a search runs with unless a case says
+// otherwise. Exact only *restricts* (the tag must be the whole string) when it
+// is asked for on its own, i.e. with fuzzy off.
+async function search(tag, { exact = true, fuzzy = true } = {}) {
+  await page.setChecked('#exactToggle', exact);
+  await page.setChecked('#fuzzyToggle', fuzzy);
   await page.fill('#searchInput', tag);
   await page.click('#searchBtn');
   await page.waitForTimeout(250);
@@ -138,7 +150,16 @@ check('formatting-insensitive search finds the tag', (await search('11-004')).le
   check('glyph-confused tag is found', r.length === 1, JSON.stringify(r));
   check('and is badged GLYPH so it reads as a guess', r[0]?.badges.includes('GLYPH'), JSON.stringify(r[0]?.badges));
 }
-check('a different tag does not match (precision)', (await search('PT-11005')).length === 0);
+check('a different tag does not match (precision)',
+  (await search('PT-11005', { fuzzy: false })).length === 0);
+{
+  // With the last-resort tier on by default a one-character-off tag can still
+  // surface — it just must never be presented as a match.
+  const r = await search('PT-11005');
+  const bands = await bandsShown();
+  check('a near-miss is only ever offered as a Possible',
+    r.length === 0 || bands.every(b => b === 'band-possible'), JSON.stringify(bands));
+}
 
 // ---- confidence banding -------------------------------------------------
 {
@@ -152,15 +173,21 @@ check('a different tag does not match (precision)', (await search('PT-11005')).l
     (await bandsShown()).includes('band-likely'), JSON.stringify(await bandsShown()));
 }
 {
-  // The drawing says FC2015; the tag is FIC-2015. Nothing matches on the cheap
-  // pass, so the search escalates to allow the erased I — and says so.
-  const r = await search('FIC-2015');
+  // The drawing says FC2015; the tag is FIC-2015. With the last-resort tier off
+  // nothing matches on the cheap pass, so the search escalates to allow the
+  // erased I — and says so.
+  const r = await search('FIC-2015', { exact: false, fuzzy: false });
   check('a tag with a character erased is still found', r.length === 1, JSON.stringify(r));
   check('and is filed under Possible, not presented as a match',
     (await bandsShown()).includes('band-possible'), JSON.stringify(await bandsShown()));
   const summary = await page.textContent('#searchSummary');
   check('and the summary says the search had to try harder',
     /lost entirely/.test(summary), summary);
+  // Under the shipped defaults the same tag is found by the fuzzy tier
+  // instead — by a different route, but still never as a certainty.
+  check('and under the default toggles it is still only a Possible',
+    (await search('FIC-2015')).length === 1 &&
+    (await bandsShown()).every(b => b === 'band-possible'), JSON.stringify(await bandsShown()));
 }
 
 // Clicking a result must navigate and highlight without throwing.
@@ -181,10 +208,22 @@ if (process.env.SKIP_OCR) {
   writeFileSync(ocrPath, makePdf([[{ text: 'PT-9042', x: 20, y: 60, size: 24 }]],
     { width: 260, height: 120 }));
   await page.setInputFiles('#fileInput', ocrPath);
+  // OCR is slow enough to observe the reading state itself: the drawing is
+  // covered and the search box is shut while the page is being read.
+  await page.waitForFunction(
+    () => document.querySelector('#viewerLoading').classList.contains('visible'),
+    null, { timeout: 30000 });
+  check('the drawing is covered while it is being read', true);
+  check('search is shut while the document is being read',
+    await page.isDisabled('#searchInput'));
+
   await page.waitForFunction(
     () => document.querySelector('#procDetailText').textContent.includes('via OCR'),
     null, { timeout: 180000 });
   check('a page with no real text layer is routed to OCR', true);
+  await page.waitForFunction(
+    () => document.querySelector('#procDetailText').textContent.includes('done, ready to search'),
+    null, { timeout: 180000 });
 
   // This page has a thin text layer AND was OCR'd, so both sources report it —
   // which is the intended behaviour (pageHasImage / TEXT_LEN_THRESHOLD), and
@@ -193,6 +232,20 @@ if (process.env.SKIP_OCR) {
   check('OCR-read tag is found', r.length >= 1, JSON.stringify(r));
   check('an OCR row is present, not only the text-layer row',
     r.some(x => x.badges.includes('OCR')), JSON.stringify(r.map(x => x.badges)));
+
+  // ---- asking for rotated text after the fact ---------------------------
+  // Ticking the box mid-document has to put the page back to work rather than
+  // silently applying to nothing.
+  await page.check('#rotatedTextToggle');
+  check('ticking rotated-text scanning starts reading again',
+    await page.isDisabled('#searchInput') &&
+    await page.evaluate(() => document.querySelector('#viewerLoading').classList.contains('visible')));
+  await page.waitForFunction(
+    () => document.querySelector('#procDetailText').textContent.includes('done, ready to search'),
+    null, { timeout: 180000 });
+  check('and finishes back in a searchable state', await page.isEnabled('#searchInput'));
+  check('the tag is still found after the extra passes',
+    (await search('PT-9042')).length >= 1);
 }
 
 check('no script errors during the whole run', errors.length === 0, errors.join(' | '));

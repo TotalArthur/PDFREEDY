@@ -43,9 +43,13 @@ test-fixture patterns, but check `git status` before you commit anyway.
 - **Dropped-character tolerant** — blur doesn't only turn characters into other
   characters, it erases them. `FIC-2015` comes back as `FC2015`, `XV-3308` as
   `X-3308`. See below.
-- **Exact match** toggle for strict whole-string matching.
-- **Fuzzy** toggle uses Levenshtein distance to surface near-misses. Off by default,
-  because guesses shouldn't look like certainties.
+- **Exact match** and **Fuzzy** are both on by default. They are tiers to include, not
+  modes to choose between: everything is searched, and whole-tag exact hits are listed
+  first. Untick Fuzzy and Exact becomes the one restrictive case — the tag has to *be*
+  the whole string.
+- **Fuzzy** uses Levenshtein distance to surface near-misses. It is always the last
+  resort: those hits are banded `Possible`, badged `FUZZY`, sorted below everything else
+  in their band, and ordered best-read first — a guess never looks like a certainty.
 
 ### Results are banded by how sure the tool is
 
@@ -140,8 +144,11 @@ Per page, on load:
    of an image of the actual drawing, and going by character count alone would skip OCR
    and silently miss every tag on the page.
 3. **Lazy and cancellable.** The visible page is processed first, then the rest in the
-   background, so you can search finished pages while later ones are still running.
-   Per-page progress is live, with **Skip page** and **Cancel** controls.
+   background. The drawing is covered and the search box is shut while that runs — a
+   search against a half-read document reports tags as absent when they simply haven't
+   been read yet. Per-page progress is live, with **Skip page** and **Cancel** controls,
+   and the status line says *done, ready to search* when there is nothing left to wait
+   for.
 
 ### Before OCR runs: conditioning, but only where it helps
 
@@ -195,6 +202,11 @@ Ticking **"Also scan rotated/vertical text"** runs four passes (0°/90°/180°/2
 merges them, mapping every box back into page coordinates. This catches vertical line
 labels but takes about 4× as long. Off by default.
 
+Ticking it *after* a document has been read doesn't start over: each page tracks which
+rotations it has already had, goes back in the queue, and runs only the three it is
+missing, appending to the words it already holds. Unticking keeps that work — it just
+stops searching the rotated words, so the results on screen always match the checkbox.
+
 Tesseract runs in `SPARSE_TEXT` mode with a character whitelist — drawings are line art
 with scattered labels, not paragraphs, and that combination measurably cut both noise and
 runtime on real sheets.
@@ -227,8 +239,6 @@ Use **Clear** to drop all saved corrections.
 
 ## Other features
 
-- **Export CSV** — page, source, confidence, matched text, and the raw OCR text for
-  anything you corrected.
 - Zoom (buttons, scroll wheel), drag-to-pan, page navigation.
 
 ---

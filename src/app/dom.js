@@ -21,7 +21,6 @@ const skipPageBtn = $('skipPageBtn');
 const cancelProcBtn = $('cancelProcBtn');
 const resultsCount = $('resultsCount');
 const resultsList = $('resultsList');
-const exportCsvBtn = $('exportCsvBtn');
 const toolbar = $('toolbar');
 const prevPageBtn = $('prevPageBtn');
 const nextPageBtn = $('nextPageBtn');
@@ -39,9 +38,8 @@ const pageCanvas = $('pageCanvas');
 const overlayCanvas = $('overlayCanvas');
 const rotatedTextToggle = $('rotatedTextToggle');
 const emptyViewer = $('emptyViewer');
-const pageProgressBanner = $('pageProgressBanner');
-const pageProgressText = $('pageProgressText');
-const pageProgressSpinner = $('pageProgressSpinner');
+const viewerLoading = $('viewerLoading');
+const viewerLoadingText = $('viewerLoadingText');
 
 const pageCtx = pageCanvas.getContext('2d');
 const overlayCtx = overlayCanvas.getContext('2d');
@@ -66,7 +64,6 @@ export {
   cancelProcBtn,
   resultsCount,
   resultsList,
-  exportCsvBtn,
   toolbar,
   prevPageBtn,
   nextPageBtn,
@@ -84,9 +81,8 @@ export {
   overlayCanvas,
   rotatedTextToggle,
   emptyViewer,
-  pageProgressBanner,
-  pageProgressText,
-  pageProgressSpinner,
+  viewerLoading,
+  viewerLoadingText,
   pageCtx,
   overlayCtx,
 };

@@ -1,6 +1,6 @@
 import { S } from './state.js';
 import { renderPage } from './viewer.js';
-import { updateProcSummary, startBackgroundProcessing, hidePageProgressBanner } from './queue.js';
+import { updateProcSummary, startBackgroundProcessing, hideViewerLoading } from './queue.js';
 import {
   fileInput,
   fileInfo,
@@ -14,7 +14,6 @@ import {
   cancelProcBtn,
   resultsCount,
   resultsList,
-  exportCsvBtn,
   toolbar,
   pageNumInput,
   pageCountLabel,
@@ -94,8 +93,8 @@ async function loadPdf(file) {
     emptyViewer.style.display = 'none';
     canvasStage.style.display = '';
     toolbar.style.display = '';
-    searchInput.disabled = false;
-    searchBtn.disabled = false;
+    // Search stays shut until the background queue has read every page —
+    // startBackgroundProcessing owns opening it again.
     cancelProcBtn.disabled = false;
     pageCountLabel.textContent = '/ ' + S.numPages;
     pageNumInput.value = '1';
@@ -124,15 +123,14 @@ function resetDocumentState() {
   if (S.ocrWorker) { S.ocrWorker.terminate().catch(()=>{}); S.ocrWorker = null; }
   resultsList.innerHTML = '<div class="empty-note">Load a PDF and run a search to see matches here.</div>';
   resultsCount.textContent = 'Results';
-  exportCsvBtn.disabled = true;
   searchSummary.textContent = '';
   searchInput.disabled = true; searchBtn.disabled = true;
   skipPageBtn.disabled = true; cancelProcBtn.disabled = true;
   toolbar.style.display = 'none';
   canvasStage.style.display = 'none';
   emptyViewer.style.display = '';
-  hidePageProgressBanner();
-  procBarInner.classList.remove('processing');
+  hideViewerLoading();
+  procBarInner.classList.remove('processing', 'done');
   procSpinner.classList.remove('active');
 }
 
