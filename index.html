@@ -281,10 +281,13 @@
   }
   #markupWidthInput { width: 70px; vertical-align: middle; }
   #markupWidthLabel { font-size: 12px; color: var(--text-dim); width: 30px; text-align: center; display: inline-block; }
+  #markupOpacityInput { width: 70px; vertical-align: middle; }
+  #markupOpacityLabel { font-size: 12px; color: var(--text-dim); width: 34px; text-align: center; display: inline-block; }
   #markupToolSelect {
     padding: 5px 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2);
     color: var(--text); font-size: 13px;
   }
+  #markupHint { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
   .page-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }
   .page-badge.text { background: #274a2e; color: var(--good); }
   .page-badge.ocr { background: #4a3d1c; color: var(--warn); }
@@ -412,10 +415,14 @@
         <select id="markupToolSelect" title="Markup shape">
           <option value="pen">Freehand</option>
           <option value="line">Straight line</option>
+          <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
         </select>
+        <span id="markupHint" hidden>Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel</span>
         <input type="color" id="markupColorInput" value="#ff3b30" title="Markup color">
         <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
         <span id="markupWidthLabel">3px</span>
+        <input type="range" id="markupOpacityInput" min="10" max="100" step="5" value="100" title="Markup opacity">
+        <span id="markupOpacityLabel">100%</span>
         <button id="markupUndoBtn" title="Undo last stroke on this page" disabled>Undo</button>
         <button id="markupClearBtn" title="Clear all markups on this page" disabled>Clear page</button>
         <button id="markupExportBtn" title="Export a PDF with markups burned in" disabled>Export PDF</button>
@@ -491,9 +498,12 @@
   var zoomResetBtn = $("zoomResetBtn");
   var pencilBtn = $("pencilBtn");
   var markupToolSelect = $("markupToolSelect");
+  var markupHint = $("markupHint");
   var markupColorInput = $("markupColorInput");
   var markupWidthInput = $("markupWidthInput");
   var markupWidthLabel = $("markupWidthLabel");
+  var markupOpacityInput = $("markupOpacityInput");
+  var markupOpacityLabel = $("markupOpacityLabel");
   var markupUndoBtn = $("markupUndoBtn");
   var markupClearBtn = $("markupClearBtn");
   var markupExportBtn = $("markupExportBtn");
@@ -541,10 +551,12 @@
     mode: "view",
     // 'view' | 'markup'
     markupTool: "pen",
-    // 'pen' | 'line'
+    // 'pen' | 'line' | 'polyline'
     markupColor: "#ff3b30",
     markupWidth: 3,
     // PDF-space points (not canvas pixels)
+    markupOpacity: 1,
+    // 0..1
     markups: /* @__PURE__ */ new Map(),
     // pageNum -> Stroke[]
     // Cloned copy of the loaded file's bytes, kept around because pdf.js can
@@ -2107,20 +2119,48 @@
   function drawSegment(p0, p1) {
     overlayCtx.strokeStyle = S.markupColor;
     overlayCtx.lineWidth = Math.max(1, S.markupWidth * S.scale);
+    overlayCtx.globalAlpha = S.markupOpacity;
     overlayCtx.lineJoin = "round";
     overlayCtx.lineCap = "round";
     overlayCtx.beginPath();
     overlayCtx.moveTo(p0[0], p0[1]);
     overlayCtx.lineTo(p1[0], p1[1]);
     overlayCtx.stroke();
+    overlayCtx.globalAlpha = 1;
+  }
+  function drawPolyline(pts) {
+    for (let i = 1; i < pts.length; i++) drawSegment(pts[i - 1], pts[i]);
+  }
+  function commitStroke(tool, canvasPts) {
+    return (async () => {
+      const page = await getPageProxy(S.currentPage);
+      const viewport = page.getViewport({ scale: S.scale });
+      const pdfPoints = canvasPts.map(([x, y]) => pdfPointFromCanvas(viewport, x, y));
+      const stroke = {
+        id: "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+        tool,
+        color: S.markupColor,
+        width: S.markupWidth,
+        opacity: S.markupOpacity,
+        points: pdfPoints,
+        createdAt: Date.now()
+      };
+      if (!S.markups.has(S.currentPage)) S.markups.set(S.currentPage, []);
+      S.markups.get(S.currentPage).push(stroke);
+      await refreshOverlay();
+      updateMarkupButtons();
+    })();
   }
   pencilBtn.addEventListener("click", () => {
     if (!S.pdfDoc) return;
     S.mode = S.mode === "markup" ? "view" : "markup";
+    if (S.mode !== "markup") cancelPolyline();
     syncMarkupModeUI();
   });
   markupToolSelect.addEventListener("change", () => {
+    cancelPolyline();
     S.markupTool = markupToolSelect.value;
+    markupHint.hidden = S.markupTool !== "polyline";
   });
   markupColorInput.addEventListener("input", () => {
     S.markupColor = markupColorInput.value;
@@ -2129,10 +2169,14 @@
     S.markupWidth = parseInt(markupWidthInput.value, 10) || 1;
     markupWidthLabel.textContent = S.markupWidth + "px";
   });
+  markupOpacityInput.addEventListener("input", () => {
+    S.markupOpacity = (parseInt(markupOpacityInput.value, 10) || 100) / 100;
+    markupOpacityLabel.textContent = Math.round(S.markupOpacity * 100) + "%";
+  });
   var drawingActive = false;
   var currentPoints = [];
   overlayCanvas.addEventListener("mousedown", (e) => {
-    if (S.mode !== "markup" || !S.pdfDoc) return;
+    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool === "polyline") return;
     drawingActive = true;
     currentPoints = [canvasPointFromEvent(e)];
     e.preventDefault();
@@ -2155,21 +2199,56 @@
     const pts = currentPoints;
     currentPoints = [];
     if (pts.length < 2) return;
-    const page = await getPageProxy(S.currentPage);
-    const viewport = page.getViewport({ scale: S.scale });
-    const pdfPoints = pts.map(([x, y]) => pdfPointFromCanvas(viewport, x, y));
-    const stroke = {
-      id: "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-      tool: S.markupTool,
-      color: S.markupColor,
-      width: S.markupWidth,
-      points: pdfPoints,
-      createdAt: Date.now()
-    };
-    if (!S.markups.has(S.currentPage)) S.markups.set(S.currentPage, []);
-    S.markups.get(S.currentPage).push(stroke);
+    await commitStroke(S.markupTool, pts);
+  });
+  var polylinePoints = [];
+  function polylineActive() {
+    return polylinePoints.length > 0;
+  }
+  function cancelPolyline() {
+    if (!polylineActive()) return;
+    polylinePoints = [];
+    refreshOverlay();
+  }
+  async function finishPolyline(pts) {
+    polylinePoints = [];
+    if (pts.length < 2) {
+      await refreshOverlay();
+      return;
+    }
+    await commitStroke("polyline", pts);
+  }
+  overlayCanvas.addEventListener("click", (e) => {
+    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline") return;
+    const pt = canvasPointFromEvent(e);
+    if (!polylineActive()) {
+      polylinePoints = [pt];
+      return;
+    }
+    drawSegment(polylinePoints[polylinePoints.length - 1], pt);
+    polylinePoints.push(pt);
+  });
+  overlayCanvas.addEventListener("dblclick", async (e) => {
+    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline" || !polylineActive()) return;
+    e.preventDefault();
+    const pts = polylinePoints.slice(0, -1);
+    await finishPolyline(pts);
+  });
+  window.addEventListener("keydown", async (e) => {
+    if (S.mode !== "markup" || S.markupTool !== "polyline" || !polylineActive()) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      await finishPolyline(polylinePoints);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelPolyline();
+    }
+  });
+  window.addEventListener("mousemove", async (e) => {
+    if (S.mode !== "markup" || S.markupTool !== "polyline" || !polylineActive()) return;
+    const pt = canvasPointFromEvent(e);
     await refreshOverlay();
-    updateMarkupButtons();
+    drawPolyline([...polylinePoints, pt]);
   });
   markupUndoBtn.addEventListener("click", async () => {
     const strokes = S.markups.get(S.currentPage);
@@ -2188,6 +2267,7 @@
 
   // src/app/viewer.js
   async function renderPage(pageNum) {
+    if (typeof window !== "undefined") window.__pdfreedyRenderCount = (window.__pdfreedyRenderCount || 0) + 1;
     if (S.currentRenderTask) {
       try {
         S.currentRenderTask.cancel();
@@ -2251,18 +2331,44 @@
   function clearOverlay() {
     overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   }
-  async function drawHighlights(activeOnly) {
+  var pulseHandle = null;
+  function activeResultOnThisPage() {
+    const res = S.lastResults[S.activeResultIndex];
+    return res && res.page === S.currentPage ? res : null;
+  }
+  function stopPulse() {
+    if (pulseHandle) {
+      cancelAnimationFrame(pulseHandle);
+      pulseHandle = null;
+    }
+  }
+  function schedulePulse() {
+    if (pulseHandle) return;
+    pulseHandle = requestAnimationFrame(async () => {
+      pulseHandle = null;
+      await drawHighlights();
+      await drawMarkups();
+    });
+  }
+  async function drawHighlights() {
     clearOverlay();
-    if (!S.lastResults.length) return;
+    if (!S.lastResults.length) {
+      stopPulse();
+      return;
+    }
     const page = await getPageProxy(S.currentPage);
     const viewport = page.getViewport({ scale: S.scale });
     const data = S.pageData.get(S.currentPage);
+    const pulse = 0.72 + 0.28 * Math.sin(Date.now() / 350);
     S.lastResults.forEach((res, i) => {
       if (res.page !== S.currentPage) return;
       const isActive = i === S.activeResultIndex;
-      overlayCtx.lineWidth = isActive ? 3 : 1.5;
-      overlayCtx.strokeStyle = isActive ? "#ff5c5c" : "rgba(79,157,255,0.85)";
-      overlayCtx.fillStyle = isActive ? "rgba(255,92,92,0.18)" : "rgba(79,157,255,0.12)";
+      overlayCtx.lineWidth = isActive ? 2.5 : 1.5;
+      overlayCtx.strokeStyle = isActive ? "#ff5c7a" : "rgba(94,169,255,0.85)";
+      overlayCtx.fillStyle = isActive ? "rgba(255,92,122,0.16)" : "rgba(94,169,255,0.10)";
+      overlayCtx.globalAlpha = isActive ? pulse : 1;
+      overlayCtx.shadowColor = isActive ? "rgba(255,92,122,0.65)" : "transparent";
+      overlayCtx.shadowBlur = isActive ? 10 : 0;
       if (res.source === "text") {
         for (const idx of res.itemIndices) {
           const it = data.textItems[idx];
@@ -2273,15 +2379,37 @@
         const x0 = res.bbox.x0 * ratio, y0 = res.bbox.y0 * ratio, x1 = res.bbox.x1 * ratio, y1 = res.bbox.y1 * ratio;
         strokePoly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
       }
+      overlayCtx.globalAlpha = 1;
+      overlayCtx.shadowBlur = 0;
+      overlayCtx.shadowColor = "transparent";
     });
+    if (activeResultOnThisPage() && S.mode !== "markup") schedulePulse();
+    else stopPulse();
   }
-  function strokePoly(pts) {
+  function strokePoly(pts, radius = 4) {
+    const n = pts.length;
     overlayCtx.beginPath();
-    overlayCtx.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < pts.length; i++) overlayCtx.lineTo(pts[i][0], pts[i][1]);
+    for (let i = 0; i < n; i++) {
+      const curr = pts[i];
+      const prev = pts[(i - 1 + n) % n];
+      const next = pts[(i + 1) % n];
+      const r = Math.min(radius, dist(curr, prev) / 2, dist(curr, next) / 2);
+      const p1 = towards(curr, prev, r);
+      const p2 = towards(curr, next, r);
+      if (i === 0) overlayCtx.moveTo(p1[0], p1[1]);
+      else overlayCtx.lineTo(p1[0], p1[1]);
+      overlayCtx.quadraticCurveTo(curr[0], curr[1], p2[0], p2[1]);
+    }
     overlayCtx.closePath();
     overlayCtx.fill();
     overlayCtx.stroke();
+  }
+  function dist(a, b) {
+    return Math.hypot(b[0] - a[0], b[1] - a[1]);
+  }
+  function towards(from, to, d) {
+    const len = dist(from, to) || 1;
+    return [from[0] + (to[0] - from[0]) / len * d, from[1] + (to[1] - from[1]) / len * d];
   }
   async function drawMarkups() {
     const strokes = S.markups.get(S.currentPage);
@@ -2293,12 +2421,14 @@
       const canvasPts = s.points.map(([x, y]) => applyMatrix(viewport.transform, x, y));
       overlayCtx.strokeStyle = s.color;
       overlayCtx.lineWidth = Math.max(1, s.width * S.scale);
+      overlayCtx.globalAlpha = s.opacity == null ? 1 : s.opacity;
       overlayCtx.lineJoin = "round";
       overlayCtx.lineCap = "round";
       overlayCtx.beginPath();
       overlayCtx.moveTo(canvasPts[0][0], canvasPts[0][1]);
       for (let i = 1; i < canvasPts.length; i++) overlayCtx.lineTo(canvasPts[i][0], canvasPts[i][1]);
       overlayCtx.stroke();
+      overlayCtx.globalAlpha = 1;
     }
   }
   async function jumpToResult(i) {
@@ -2345,38 +2475,66 @@
     S.scale = clamp(newScale, 0.25, 8);
     zoomLabel.textContent = Math.round(S.scale / 1.5 * 100) + "%";
   }
-  zoomInBtn.addEventListener("click", async () => {
-    setZoom(S.scale * 1.25);
+  function captureZoomAnchor(clientX, clientY) {
+    const rect = canvasScroll.getBoundingClientRect();
+    return {
+      offsetX: clientX - rect.left + canvasScroll.scrollLeft,
+      offsetY: clientY - rect.top + canvasScroll.scrollTop,
+      clientX,
+      clientY
+    };
+  }
+  function restoreZoomAnchor(anchor, ratio) {
+    const rect = canvasScroll.getBoundingClientRect();
+    canvasScroll.scrollLeft = anchor.offsetX * ratio - (anchor.clientX - rect.left);
+    canvasScroll.scrollTop = anchor.offsetY * ratio - (anchor.clientY - rect.top);
+  }
+  async function zoomAtViewportCenter(newScale) {
+    const rect = canvasScroll.getBoundingClientRect();
+    const anchor = captureZoomAnchor(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const oldScale = S.scale;
+    setZoom(newScale);
     await renderPage(S.currentPage);
-  });
-  zoomOutBtn.addEventListener("click", async () => {
-    setZoom(S.scale / 1.25);
-    await renderPage(S.currentPage);
-  });
-  zoomResetBtn.addEventListener("click", async () => {
-    setZoom(1.5);
-    await renderPage(S.currentPage);
-  });
+    restoreZoomAnchor(anchor, S.scale / oldScale);
+  }
+  zoomInBtn.addEventListener("click", () => zoomAtViewportCenter(S.scale * 1.25));
+  zoomOutBtn.addEventListener("click", () => zoomAtViewportCenter(S.scale / 1.25));
+  zoomResetBtn.addEventListener("click", () => zoomAtViewportCenter(1.5));
   fitWidthBtn.addEventListener("click", async () => {
     const page = await getPageProxy(S.currentPage);
     const vp1 = page.getViewport({ scale: 1 });
     const target = (canvasScroll.clientWidth - 48) / vp1.width;
-    setZoom(target);
-    await renderPage(S.currentPage);
+    await zoomAtViewportCenter(target);
   });
   setZoom(1.5);
-  canvasScroll.addEventListener("wheel", async (e) => {
+  var zoomPending = false;
+  var zoomAnchor = null;
+  var zoomStartScale = 1;
+  async function processZoomFrame() {
+    if (!zoomAnchor) {
+      zoomPending = false;
+      return;
+    }
+    const anchor = zoomAnchor;
+    const startScale = zoomStartScale;
+    zoomAnchor = null;
+    await renderPage(S.currentPage);
+    restoreZoomAnchor(anchor, S.scale / startScale);
+    if (zoomAnchor) requestAnimationFrame(processZoomFrame);
+    else zoomPending = false;
+  }
+  canvasScroll.addEventListener("wheel", (e) => {
     if (!S.pdfDoc) return;
     e.preventDefault();
-    const rect = canvasScroll.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left + canvasScroll.scrollLeft;
-    const offsetY = e.clientY - rect.top + canvasScroll.scrollTop;
-    const oldScale = S.scale;
+    if (!zoomAnchor) {
+      zoomAnchor = captureZoomAnchor(e.clientX, e.clientY);
+      zoomStartScale = S.scale;
+    }
     setZoom(S.scale * (e.deltaY < 0 ? 1.1 : 0.9));
-    const ratio = S.scale / oldScale;
-    await renderPage(S.currentPage);
-    canvasScroll.scrollLeft = offsetX * ratio - (e.clientX - rect.left);
-    canvasScroll.scrollTop = offsetY * ratio - (e.clientY - rect.top);
+    if (!zoomPending) {
+      zoomPending = true;
+      requestAnimationFrame(processZoomFrame);
+    }
   }, { passive: false });
   var dragging = false;
   var dragStartX = 0;
@@ -2500,6 +2658,7 @@
     S.mode = "view";
     S.rawFileBytes = null;
     S.fileName = "";
+    cancelPolyline();
     syncMarkupModeUI();
     updateMarkupButtons();
     if (S.currentRenderTask) {
@@ -2786,7 +2945,7 @@
               end: { x: x1, y: y1 },
               thickness: s.width,
               color: PDFLib.rgb(r, g, b),
-              opacity: 1,
+              opacity: s.opacity == null ? 1 : s.opacity,
               lineCap: PDFLib.LineCapStyle.Round
             });
           }

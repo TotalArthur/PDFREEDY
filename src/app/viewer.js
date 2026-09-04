@@ -28,6 +28,11 @@ import {
 // Viewer: render page, zoom/pan, highlight overlay
 // =======================================================================
 async function renderPage(pageNum) {
+  // Test-only observability hook (see tests/e2e-markup.test.mjs): counts real
+  // page renders so the wheel-zoom coalescing fix can be verified — a burst
+  // of wheel events should produce far fewer renders than events.
+  if (typeof window !== 'undefined') window.__pdfreedyRenderCount = (window.__pdfreedyRenderCount || 0) + 1;
+
   // Only one render may target the shared page canvas at a time. Zooming,
   // page-flipping or dropping a new PDF mid-render would otherwise hit
   // pdf.js's "same canvas during multiple render() operations" error, so
@@ -96,19 +101,50 @@ function clearOverlay() {
 // the first of the two calls each render pass clears it — see renderPage()
 // and jumpToResult(), which always call drawHighlights() immediately before
 // drawMarkups().
-async function drawHighlights(activeOnly) {
+//
+// The active match also gets a slow pulse. Since drawHighlights() is called
+// from many places (search, results list, queue, markup redraws) rather than
+// one central spot, the pulse is self-scheduling: every real call checks
+// whether an active result sits on the current page and, if so, arranges for
+// exactly one more animation frame to redraw — see schedulePulse()/stopPulse().
+let pulseHandle = null;
+
+function activeResultOnThisPage() {
+  const res = S.lastResults[S.activeResultIndex];
+  return res && res.page === S.currentPage ? res : null;
+}
+
+function stopPulse() {
+  if (pulseHandle) { cancelAnimationFrame(pulseHandle); pulseHandle = null; }
+}
+
+function schedulePulse() {
+  if (pulseHandle) return; // a redraw is already pending
+  pulseHandle = requestAnimationFrame(async () => {
+    pulseHandle = null;
+    await drawHighlights();
+    await drawMarkups();
+  });
+}
+
+async function drawHighlights() {
   clearOverlay();
-  if (!S.lastResults.length) return;
+  if (!S.lastResults.length) { stopPulse(); return; }
   const page = await getPageProxy(S.currentPage);
   const viewport = page.getViewport({ scale: S.scale });
   const data = S.pageData.get(S.currentPage);
+  // A gentle breathing pulse, ~2.2s per cycle, applied only to the active box.
+  const pulse = 0.72 + 0.28 * Math.sin(Date.now() / 350);
 
   S.lastResults.forEach((res, i) => {
     if (res.page !== S.currentPage) return;
     const isActive = i === S.activeResultIndex;
-    overlayCtx.lineWidth = isActive ? 3 : 1.5;
-    overlayCtx.strokeStyle = isActive ? '#ff5c5c' : 'rgba(79,157,255,0.85)';
-    overlayCtx.fillStyle = isActive ? 'rgba(255,92,92,0.18)' : 'rgba(79,157,255,0.12)';
+    overlayCtx.lineWidth = isActive ? 2.5 : 1.5;
+    overlayCtx.strokeStyle = isActive ? '#ff5c7a' : 'rgba(94,169,255,0.85)';
+    overlayCtx.fillStyle = isActive ? 'rgba(255,92,122,0.16)' : 'rgba(94,169,255,0.10)';
+    overlayCtx.globalAlpha = isActive ? pulse : 1;
+    overlayCtx.shadowColor = isActive ? 'rgba(255,92,122,0.65)' : 'transparent';
+    overlayCtx.shadowBlur = isActive ? 10 : 0;
 
     if (res.source === 'text') {
       for (const idx of res.itemIndices) {
@@ -120,16 +156,44 @@ async function drawHighlights(activeOnly) {
       const x0 = res.bbox.x0*ratio, y0 = res.bbox.y0*ratio, x1 = res.bbox.x1*ratio, y1 = res.bbox.y1*ratio;
       strokePoly([[x0,y0],[x1,y0],[x1,y1],[x0,y1]]);
     }
+    // Never let shadow/alpha state bleed into the next box or into the
+    // markup strokes drawMarkups() paints right after this function returns.
+    overlayCtx.globalAlpha = 1;
+    overlayCtx.shadowBlur = 0;
+    overlayCtx.shadowColor = 'transparent';
   });
+
+  // Pulsing while actively drawing a markup would fight the live preview
+  // (both redraw the same overlay), so it's paused for the duration.
+  if (activeResultOnThisPage() && S.mode !== 'markup') schedulePulse();
+  else stopPulse();
 }
 
-function strokePoly(pts) {
+// Traces a soft-cornered version of an arbitrary (possibly rotated) quad —
+// rounding a general polygon rather than assuming an axis-aligned rect,
+// since rotated-text search hits produce a rotated quad, not a plain box.
+function strokePoly(pts, radius = 4) {
+  const n = pts.length;
   overlayCtx.beginPath();
-  overlayCtx.moveTo(pts[0][0], pts[0][1]);
-  for (let i=1;i<pts.length;i++) overlayCtx.lineTo(pts[i][0], pts[i][1]);
+  for (let i = 0; i < n; i++) {
+    const curr = pts[i];
+    const prev = pts[(i - 1 + n) % n];
+    const next = pts[(i + 1) % n];
+    const r = Math.min(radius, dist(curr, prev) / 2, dist(curr, next) / 2);
+    const p1 = towards(curr, prev, r);
+    const p2 = towards(curr, next, r);
+    if (i === 0) overlayCtx.moveTo(p1[0], p1[1]); else overlayCtx.lineTo(p1[0], p1[1]);
+    overlayCtx.quadraticCurveTo(curr[0], curr[1], p2[0], p2[1]);
+  }
   overlayCtx.closePath();
   overlayCtx.fill();
   overlayCtx.stroke();
+}
+
+function dist(a, b) { return Math.hypot(b[0]-a[0], b[1]-a[1]); }
+function towards(from, to, d) {
+  const len = dist(from, to) || 1;
+  return [from[0] + (to[0]-from[0])/len*d, from[1] + (to[1]-from[1])/len*d];
 }
 
 // Re-projects each stored (PDF-space, zoom-independent) stroke through the
@@ -146,12 +210,14 @@ async function drawMarkups() {
     const canvasPts = s.points.map(([x,y]) => applyMatrix(viewport.transform, x, y));
     overlayCtx.strokeStyle = s.color;
     overlayCtx.lineWidth = Math.max(1, s.width * S.scale);
+    overlayCtx.globalAlpha = s.opacity == null ? 1 : s.opacity;
     overlayCtx.lineJoin = 'round';
     overlayCtx.lineCap = 'round';
     overlayCtx.beginPath();
     overlayCtx.moveTo(canvasPts[0][0], canvasPts[0][1]);
     for (let i = 1; i < canvasPts.length; i++) overlayCtx.lineTo(canvasPts[i][0], canvasPts[i][1]);
     overlayCtx.stroke();
+    overlayCtx.globalAlpha = 1;
   }
 }
 
@@ -204,30 +270,85 @@ function setZoom(newScale) {
   S.scale = clamp(newScale, 0.25, 8);
   zoomLabel.textContent = Math.round(S.scale/1.5*100) + '%'; // 1.5 == "100%" baseline
 }
-zoomInBtn.addEventListener('click', async () => { setZoom(S.scale*1.25); await renderPage(S.currentPage); });
-zoomOutBtn.addEventListener('click', async () => { setZoom(S.scale/1.25); await renderPage(S.currentPage); });
-zoomResetBtn.addEventListener('click', async () => { setZoom(1.5); await renderPage(S.currentPage); });
+
+// Captures where (clientX, clientY) sits in scrolled drawing-space, so that
+// point can be kept fixed on screen across a zoom change — otherwise a big
+// zoom change (zoom way in, then hit "100%") leaves the scroll offset
+// pointing nowhere sane in the now-much-smaller content, and the view can
+// end up scrolled past the page entirely. Shared by the zoom buttons
+// (anchored at the viewport center) and the wheel handler (at the cursor).
+function captureZoomAnchor(clientX, clientY) {
+  const rect = canvasScroll.getBoundingClientRect();
+  return {
+    offsetX: clientX - rect.left + canvasScroll.scrollLeft,
+    offsetY: clientY - rect.top + canvasScroll.scrollTop,
+    clientX,
+    clientY,
+  };
+}
+
+// Re-scrolls so the point captureZoomAnchor() recorded is back under the
+// same screen position, scaled by how much the zoom changed since then.
+function restoreZoomAnchor(anchor, ratio) {
+  const rect = canvasScroll.getBoundingClientRect();
+  canvasScroll.scrollLeft = anchor.offsetX*ratio - (anchor.clientX-rect.left);
+  canvasScroll.scrollTop = anchor.offsetY*ratio - (anchor.clientY-rect.top);
+}
+
+async function zoomAtViewportCenter(newScale) {
+  const rect = canvasScroll.getBoundingClientRect();
+  const anchor = captureZoomAnchor(rect.left + rect.width/2, rect.top + rect.height/2);
+  const oldScale = S.scale;
+  setZoom(newScale);
+  await renderPage(S.currentPage);
+  restoreZoomAnchor(anchor, S.scale / oldScale);
+}
+
+zoomInBtn.addEventListener('click', () => zoomAtViewportCenter(S.scale*1.25));
+zoomOutBtn.addEventListener('click', () => zoomAtViewportCenter(S.scale/1.25));
+zoomResetBtn.addEventListener('click', () => zoomAtViewportCenter(1.5));
 fitWidthBtn.addEventListener('click', async () => {
   const page = await getPageProxy(S.currentPage);
   const vp1 = page.getViewport({ scale: 1 });
   const target = (canvasScroll.clientWidth - 48) / vp1.width;
-  setZoom(target);
-  await renderPage(S.currentPage);
+  await zoomAtViewportCenter(target);
 });
 setZoom(1.5);
 
-canvasScroll.addEventListener('wheel', async (e) => {
+// A fast scroll-wheel/trackpad zoom gesture fires many `wheel` events per
+// second. Awaiting a full renderPage() (cancel in-flight render, resize +
+// clear the canvas, re-render) for every single one is what made zooming
+// feel jittery — this coalesces a burst of ticks into one real render per
+// animation frame (or per in-flight render, if that's slower than a frame),
+// while still applying every tick's scale change so the total zoom amount
+// is unaffected.
+let zoomPending = false;
+let zoomAnchor = null; // captureZoomAnchor() result, plus startScale
+let zoomStartScale = 1;
+
+async function processZoomFrame() {
+  if (!zoomAnchor) { zoomPending = false; return; }
+  const anchor = zoomAnchor;
+  const startScale = zoomStartScale;
+  zoomAnchor = null;
+  await renderPage(S.currentPage);
+  restoreZoomAnchor(anchor, S.scale / startScale);
+  if (zoomAnchor) requestAnimationFrame(processZoomFrame); // more ticks arrived mid-render
+  else zoomPending = false;
+}
+
+canvasScroll.addEventListener('wheel', (e) => {
   if (!S.pdfDoc) return;
   e.preventDefault();
-  const rect = canvasScroll.getBoundingClientRect();
-  const offsetX = e.clientX - rect.left + canvasScroll.scrollLeft;
-  const offsetY = e.clientY - rect.top + canvasScroll.scrollTop;
-  const oldScale = S.scale;
+  if (!zoomAnchor) {
+    zoomAnchor = captureZoomAnchor(e.clientX, e.clientY);
+    zoomStartScale = S.scale;
+  }
   setZoom(S.scale * (e.deltaY < 0 ? 1.1 : 0.9));
-  const ratio = S.scale / oldScale;
-  await renderPage(S.currentPage);
-  canvasScroll.scrollLeft = offsetX*ratio - (e.clientX-rect.left);
-  canvasScroll.scrollTop = offsetY*ratio - (e.clientY-rect.top);
+  if (!zoomPending) {
+    zoomPending = true;
+    requestAnimationFrame(processZoomFrame);
+  }
 }, { passive: false });
 
 // ---- drag to pan ----

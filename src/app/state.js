@@ -29,9 +29,10 @@ const S = {
 
   // Pencil markup tool.
   mode: 'view',                // 'view' | 'markup'
-  markupTool: 'pen',           // 'pen' | 'line'
+  markupTool: 'pen',           // 'pen' | 'line' | 'polyline'
   markupColor: '#ff3b30',
   markupWidth: 3,               // PDF-space points (not canvas pixels)
+  markupOpacity: 1,             // 0..1
   markups: new Map(),          // pageNum -> Stroke[]
   // Cloned copy of the loaded file's bytes, kept around because pdf.js can
   // detach/transfer the ArrayBuffer it's handed. Needed at export time to
