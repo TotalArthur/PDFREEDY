@@ -44,7 +44,7 @@ function syncMarkupModeUI() {
   // actually drawing — keeping them visible the rest of the time was clutter
   // with nothing to select. Undo/Clear/Export stay put: those apply to
   // markups already on the page, useful whether or not the pencil is active.
-  markupDrawControls.hidden = !active;
+  markupDrawControls.classList.toggle('collapsed', !active);
   if (!active) closeHintPopover();
 }
 
@@ -146,12 +146,25 @@ function commitStroke(tool, canvasPts) {
   })();
 }
 
-pencilBtn.addEventListener('click', () => {
+function togglePencilMode() {
   if (!S.pdfDoc) return;
   S.mode = S.mode === 'markup' ? 'view' : 'markup';
   if (S.mode === 'markup') selectStroke(null); // a view-mode selection is meaningless once drawing starts
   else cancelPolyline();
   syncMarkupModeUI();
+}
+
+pencilBtn.addEventListener('click', togglePencilMode);
+
+// "P" toggles the pencil, same as clicking the button — but not while the
+// user is typing into a text field, search box, or another control.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'p' && e.key !== 'P') return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  e.preventDefault();
+  togglePencilMode();
 });
 
 markupToolSelect.addEventListener('change', () => {
