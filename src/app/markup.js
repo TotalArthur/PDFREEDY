@@ -137,7 +137,8 @@ function commitStroke(tool, canvasPts) {
 pencilBtn.addEventListener('click', () => {
   if (!S.pdfDoc) return;
   S.mode = S.mode === 'markup' ? 'view' : 'markup';
-  if (S.mode !== 'markup') { cancelPolyline(); selectStroke(null); }
+  if (S.mode === 'markup') selectStroke(null); // a view-mode selection is meaningless once drawing starts
+  else cancelPolyline();
   syncMarkupModeUI();
 });
 
@@ -175,15 +176,11 @@ markupOpacityInput.addEventListener('input', () => {
 let drawingActive = false;
 let currentPoints = []; // canvas-space, while a stroke is in progress
 
-overlayCanvas.addEventListener('mousedown', async (e) => {
+overlayCanvas.addEventListener('mousedown', (e) => {
   if (S.mode !== 'markup' || !S.pdfDoc || S.markupTool === 'polyline') return;
   e.preventDefault();
-  const pt = canvasPointFromEvent(e);
-  const hit = await hitTestStroke(pt);
-  if (hit) { selectStroke(hit.id); return; }
-  if (S.selectedMarkupId) selectStroke(null);
   drawingActive = true;
-  currentPoints = [pt];
+  currentPoints = [canvasPointFromEvent(e)];
 });
 
 window.addEventListener('mousemove', async (e) => {
@@ -232,15 +229,10 @@ async function finishPolyline(pts) {
   await commitStroke('polyline', pts);
 }
 
-overlayCanvas.addEventListener('click', async (e) => {
+overlayCanvas.addEventListener('click', (e) => {
   if (S.mode !== 'markup' || !S.pdfDoc || S.markupTool !== 'polyline') return;
   const pt = canvasPointFromEvent(e);
   if (!polylineActive()) {
-    // Only the click that starts a fresh polyline can select instead of
-    // draw — once points are being chained, every click adds the next one.
-    const hit = await hitTestStroke(pt);
-    if (hit) { selectStroke(hit.id); return; }
-    if (S.selectedMarkupId) selectStroke(null);
     polylinePoints = [pt];
     return;
   }
@@ -286,7 +278,10 @@ async function deleteSelectedStroke() {
 }
 
 window.addEventListener('keydown', async (e) => {
-  if (S.mode !== 'markup' || !S.selectedMarkupId) return;
+  // Selecting a line for deletion only happens while the pencil is off (see
+  // the pan/click handler in viewer.js), so this only ever needs to act
+  // outside markup mode too.
+  if (S.mode === 'markup' || !S.selectedMarkupId) return;
   // Don't hijack Backspace/Delete/Escape while the user is typing elsewhere
   // (search box, page-number field, color/width inputs, ...).
   const tag = document.activeElement && document.activeElement.tagName;
@@ -318,4 +313,11 @@ markupClearBtn.addEventListener('click', async () => {
   updateMarkupButtons();
 });
 
-export { syncMarkupModeUI, updateMarkupButtons, cancelPolyline };
+export {
+  syncMarkupModeUI,
+  updateMarkupButtons,
+  cancelPolyline,
+  canvasPointFromEvent,
+  hitTestStroke,
+  selectStroke,
+};

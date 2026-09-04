@@ -268,7 +268,26 @@ let abMidpoint, bcMidpoint;
     alphaAfterCancel === 0, String(alphaAfterCancel));
 }
 
-// ---- select a drawn line by clicking it, then delete it with Backspace ----
+// ---- selection only happens outside pencil mode: clicking a line while the
+// pencil is still active must NOT select it (it should behave as a normal
+// click for the active tool instead) ----
+{
+  await page.mouse.click(bcMidpoint.x, bcMidpoint.y);
+  await page.waitForTimeout(150);
+  // If this click had selected+something-later-deleted the line instead of
+  // being treated as an ordinary draw click, undo would no longer be able
+  // to find it disabled the way "nothing changed" would leave it.
+  check('clicking a drawn line while the pencil is active leaves it alone (still undoable)',
+    await page.isEnabled('#markupUndoBtn'));
+  await page.keyboard.press('Escape'); // clear the stray in-progress polyline point that click started
+}
+
+// ---- exit markup mode, confirm panning works again ----
+await page.click('#pencilBtn');
+check('pencil button deactivates', !(await page.evaluate(() => document.querySelector('#pencilBtn').classList.contains('active'))));
+
+// ---- select a drawn line by clicking it (pencil off), then delete it with
+// Backspace ----
 {
   check('undo enabled before delete test (the point-to-point line exists)', await page.isEnabled('#markupUndoBtn'));
 
@@ -278,7 +297,7 @@ let abMidpoint, bcMidpoint;
   await page.mouse.click(bcMidpoint.x, bcMidpoint.y);
   await page.waitForTimeout(150);
   const selectionHaloAlpha = await alphaAt(bcMidpoint.x - freshBox.x, bcMidpoint.y - freshBox.y);
-  check('clicking on a drawn line paints a selection halo (wider than the line alone)',
+  check('clicking on a drawn line with the pencil off paints a selection halo',
     selectionHaloAlpha > 0, String(selectionHaloAlpha));
 
   await page.keyboard.press('Backspace');
@@ -288,10 +307,6 @@ let abMidpoint, bcMidpoint;
   check('Backspace deletes the selected line (both its segments are gone)',
     afterDeleteAB === 0 && afterDeleteBC === 0, `AB=${afterDeleteAB} BC=${afterDeleteBC}`);
 }
-
-// ---- exit markup mode, confirm panning works again ----
-await page.click('#pencilBtn');
-check('pencil button deactivates', !(await page.evaluate(() => document.querySelector('#pencilBtn').classList.contains('active'))));
 
 // ---- export and check the download ----
 const [download] = await Promise.all([
