@@ -433,23 +433,25 @@
         <button id="zoomResetBtn">100%</button>
         <div class="toolbar-sep"></div>
         <button id="pencilBtn" title="Draw markup on the drawing">&#9998; Pencil</button>
-        <select id="markupToolSelect" title="Markup shape">
-          <option value="pen">Freehand</option>
-          <option value="line">Straight line</option>
-          <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
-        </select>
-        <span class="hint-wrap" hidden id="markupHintWrap">
-          <button id="markupHintBtn" class="icon-btn" title="How point to point works" aria-label="How point to point works">&#9432;</button>
-          <div id="markupHintPopover" class="hint-popover" hidden role="tooltip">
-            <button id="markupHintCloseBtn" class="hint-close" aria-label="Close">&times;</button>
-            Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel
-          </div>
+        <span id="markupDrawControls" hidden>
+          <select id="markupToolSelect" title="Markup shape">
+            <option value="pen">Freehand</option>
+            <option value="line">Straight line</option>
+            <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
+          </select>
+          <span class="hint-wrap" hidden id="markupHintWrap">
+            <button id="markupHintBtn" class="icon-btn" title="How point to point works" aria-label="How point to point works">&#9432;</button>
+            <div id="markupHintPopover" class="hint-popover" hidden role="tooltip">
+              <button id="markupHintCloseBtn" class="hint-close" aria-label="Close">&times;</button>
+              Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel
+            </div>
+          </span>
+          <input type="color" id="markupColorInput" value="#52c67a" title="Markup color">
+          <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
+          <span id="markupWidthLabel">3px</span>
+          <input type="range" id="markupOpacityInput" min="10" max="100" step="5" value="45" title="Markup opacity">
+          <span id="markupOpacityLabel">45%</span>
         </span>
-        <input type="color" id="markupColorInput" value="#ff3b30" title="Markup color">
-        <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
-        <span id="markupWidthLabel">3px</span>
-        <input type="range" id="markupOpacityInput" min="10" max="100" step="5" value="100" title="Markup opacity">
-        <span id="markupOpacityLabel">100%</span>
         <button id="markupUndoBtn" title="Undo last stroke on this page" disabled>Undo</button>
         <button id="markupClearBtn" title="Clear all markups on this page" disabled>Clear page</button>
         <button id="markupExportBtn" title="Export a PDF with markups burned in" disabled>Export PDF</button>
@@ -524,6 +526,7 @@
   var fitWidthBtn = $("fitWidthBtn");
   var zoomResetBtn = $("zoomResetBtn");
   var pencilBtn = $("pencilBtn");
+  var markupDrawControls = $("markupDrawControls");
   var markupToolSelect = $("markupToolSelect");
   var markupHintWrap = $("markupHintWrap");
   var markupHintBtn = $("markupHintBtn");
@@ -582,10 +585,10 @@
     // 'view' | 'markup'
     markupTool: "pen",
     // 'pen' | 'line' | 'polyline'
-    markupColor: "#ff3b30",
+    markupColor: "#52c67a",
     markupWidth: 3,
     // PDF-space points (not canvas pixels)
-    markupOpacity: 1,
+    markupOpacity: 0.45,
     // 0..1
     markups: /* @__PURE__ */ new Map(),
     // pageNum -> Stroke[]
@@ -1912,6 +1915,8 @@
     const active = S.mode === "markup";
     pencilBtn.classList.toggle("active", active);
     overlayCanvas.classList.toggle("markup-active", active);
+    markupDrawControls.hidden = !active;
+    if (!active) closeHintPopover();
   }
   function selectStroke(id) {
     if (S.selectedMarkupId === id) return;
@@ -2074,33 +2079,43 @@
     polylinePoints = [];
     refreshOverlay();
   }
-  async function finishPolyline(pts) {
+  async function currentViewport() {
+    const page = await getPageProxy(S.currentPage);
+    return page.getViewport({ scale: S.scale });
+  }
+  async function redrawActivePolyline() {
+    if (!polylineActive()) return;
+    const viewport = await currentViewport();
+    drawPolyline(polylinePoints.map(([x, y]) => applyMatrix(viewport.transform, x, y)));
+  }
+  async function finishPolyline(pdfPts) {
     polylinePoints = [];
-    if (pts.length < 2) {
+    if (pdfPts.length < 2) {
       await refreshOverlay();
       return;
     }
-    await commitStroke("polyline", pts);
+    const viewport = await currentViewport();
+    const canvasPts = pdfPts.map(([x, y]) => applyMatrix(viewport.transform, x, y));
+    await commitStroke("polyline", canvasPts);
   }
-  function seedPolyline(canvasPts) {
+  async function seedPolyline(pdfPts) {
     cancelPolyline();
     S.mode = "markup";
     S.markupTool = "polyline";
     markupToolSelect.value = "polyline";
     syncMarkupModeUI();
     markupHintWrap.hidden = false;
-    polylinePoints = canvasPts.slice();
-    refreshOverlay().then(() => drawPolyline(polylinePoints));
+    polylinePoints = pdfPts.slice();
+    await refreshOverlay();
+    await redrawActivePolyline();
   }
-  overlayCanvas.addEventListener("click", (e) => {
+  overlayCanvas.addEventListener("click", async (e) => {
     if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline") return;
-    const pt = canvasPointFromEvent(e);
-    if (!polylineActive()) {
-      polylinePoints = [pt];
-      return;
-    }
-    drawSegment(polylinePoints[polylinePoints.length - 1], pt);
-    polylinePoints.push(pt);
+    const viewport = await currentViewport();
+    const pdfPt = pdfPointFromCanvas(viewport, ...canvasPointFromEvent(e));
+    polylinePoints.push(pdfPt);
+    await refreshOverlay();
+    await redrawActivePolyline();
   });
   overlayCanvas.addEventListener("dblclick", async (e) => {
     if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline" || !polylineActive()) return;
@@ -2121,8 +2136,10 @@
   window.addEventListener("mousemove", async (e) => {
     if (S.mode !== "markup" || S.markupTool !== "polyline" || !polylineActive()) return;
     const pt = canvasPointFromEvent(e);
+    const viewport = await currentViewport();
+    const canvasPolyline = polylinePoints.map(([x, y]) => applyMatrix(viewport.transform, x, y));
     await refreshOverlay();
-    drawPolyline([...polylinePoints, pt]);
+    drawPolyline([...canvasPolyline, pt]);
   });
   async function deleteSelectedStroke() {
     const strokes = S.markups.get(S.currentPage);
@@ -2491,7 +2508,6 @@
     const res = S.lastResults[i];
     if (!res || res.source !== "text") return;
     await jumpToResult(i);
-    const page = await getPageProxy(res.page);
     const data = S.pageData.get(res.page);
     const graph = await getPageLineGraph(res.page);
     const pts = [];
@@ -2499,13 +2515,12 @@
     const tagBbox = boundsOfPoints(pts);
     const anchor = anchorPointForTag(graph, tagBbox);
     const tracedPdfPoints = anchor ? traceFromAnchor(graph, anchor) : null;
-    const viewport = page.getViewport({ scale: S.scale });
     if (tracedPdfPoints && tracedPdfPoints.length >= 2) {
-      seedPolyline(tracedPdfPoints.map(([x, y]) => applyMatrix(viewport.transform, x, y)));
+      await seedPolyline(tracedPdfPoints);
     } else {
       const cx = (tagBbox.minX + tagBbox.maxX) / 2;
       const cy = (tagBbox.minY + tagBbox.maxY) / 2;
-      seedPolyline([applyMatrix(viewport.transform, cx, cy)]);
+      await seedPolyline([[cx, cy]]);
     }
   }
 
@@ -2748,7 +2763,11 @@
     }
     if (!S.pdfDoc) return;
     const newPage = clamp(pageNum, 1, S.numPages);
-    if (newPage !== S.currentPage) S.selectedMarkupId = null;
+    const pageChanged = newPage !== S.currentPage;
+    if (pageChanged) {
+      S.selectedMarkupId = null;
+      cancelPolyline();
+    }
     S.currentPage = newPage;
     pageNumInput.value = S.currentPage;
     const page = await getPageProxy(S.currentPage);
@@ -2773,6 +2792,7 @@
     updateProcSummary();
     await drawHighlights();
     await drawMarkups();
+    await redrawActivePolyline();
     updateMarkupButtons();
     const d = S.pageData.get(S.currentPage);
     skipPageBtn.disabled = !(d && d.status === "ocr-running");

@@ -4,7 +4,9 @@ import { itemQuadCanvas, boundsOfPoints, applyMatrix } from '../lib/geometry.js'
 import { getPageProxy } from './pdf.js';
 import { updateProcSummary } from './queue.js';
 import { renderResultsList } from './results.js';
-import { updateMarkupButtons, canvasPointFromEvent, hitTestStroke, selectStroke } from './markup.js';
+import {
+  updateMarkupButtons, canvasPointFromEvent, hitTestStroke, selectStroke, cancelPolyline, redrawActivePolyline,
+} from './markup.js';
 import {
   skipPageBtn,
   prevPageBtn,
@@ -45,9 +47,12 @@ async function renderPage(pageNum) {
   if (!S.pdfDoc) return;
 
   const newPage = clamp(pageNum, 1, S.numPages);
-  // A stroke selected for deletion belongs to the page it's drawn on — a
-  // real page change (not a same-page re-render for zoom) leaves it behind.
-  if (newPage !== S.currentPage) S.selectedMarkupId = null;
+  // A stroke selected for deletion, and an in-progress point-to-point
+  // polyline, both belong to the page they're drawn on — a real page change
+  // (not a same-page re-render for zoom) leaves them behind rather than
+  // reprojecting a page-N polyline onto page M's drawing.
+  const pageChanged = newPage !== S.currentPage;
+  if (pageChanged) { S.selectedMarkupId = null; cancelPolyline(); }
   S.currentPage = newPage;
   pageNumInput.value = S.currentPage;
   const page = await getPageProxy(S.currentPage);
@@ -73,6 +78,10 @@ async function renderPage(pageNum) {
   updateProcSummary();
   await drawHighlights();
   await drawMarkups();
+  // Reproject any in-progress point-to-point polyline through this (possibly
+  // just-changed) viewport too — otherwise a zoom mid-draw leaves the
+  // preview pointing at stale canvas coordinates from the old scale/size.
+  await redrawActivePolyline();
   updateMarkupButtons();
 
   const d = S.pageData.get(S.currentPage);
