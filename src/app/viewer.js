@@ -398,16 +398,29 @@ canvasScroll.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 // ---- drag to pan ----
-let dragging = false, dragStartX=0, dragStartY=0, dragScrollX=0, dragScrollY=0;
+// Left-drag (button 0) and middle-click-drag (button 1) both pan; anything
+// else (right-click, side buttons) is left alone.
+let dragging = false, dragButton = -1, dragStartX=0, dragStartY=0, dragScrollX=0, dragScrollY=0;
 canvasScroll.addEventListener('mousedown', async (e) => {
+  if (e.button !== 0 && e.button !== 1) return;
   if (e.target.closest('.result-item')) return;
   if (S.mode === 'markup') return; // let markup.js's drawing handlers own the gesture
-  // Selecting a drawn line (to delete it) only happens outside pencil mode,
-  // so a click that lands on one selects it instead of starting a pan.
-  const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
-  if (hit) { selectStroke(hit.id); return; }
-  if (S.selectedMarkupId) selectStroke(null);
+  if (e.button === 1) {
+    // Stop the browser's own middle-click autoscroll (the floating four-way
+    // icon) from kicking in — left unblocked, it fights our drag-to-pan for
+    // the same scroll position every frame, which is what made this feel so
+    // glitchy. Middle-click is pan-only, so it skips the stroke hit-test too:
+    // there's nothing async to wait on before the drag can start.
+    e.preventDefault();
+  } else {
+    // Selecting a drawn line (to delete it) only happens outside pencil mode,
+    // so a left-click that lands on one selects it instead of starting a pan.
+    const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
+    if (hit) { selectStroke(hit.id); return; }
+    if (S.selectedMarkupId) selectStroke(null);
+  }
   dragging = true;
+  dragButton = e.button;
   dragStartX = e.clientX; dragStartY = e.clientY;
   dragScrollX = canvasScroll.scrollLeft; dragScrollY = canvasScroll.scrollTop;
   canvasScroll.style.cursor = 'grabbing';
@@ -417,7 +430,12 @@ window.addEventListener('mousemove', (e) => {
   canvasScroll.scrollLeft = dragScrollX - (e.clientX - dragStartX);
   canvasScroll.scrollTop = dragScrollY - (e.clientY - dragStartY);
 });
-window.addEventListener('mouseup', () => { dragging = false; canvasScroll.style.cursor = ''; });
+window.addEventListener('mouseup', (e) => {
+  if (!dragging || e.button !== dragButton) return; // ignore an unrelated button releasing mid-drag
+  dragging = false;
+  dragButton = -1;
+  canvasScroll.style.cursor = '';
+});
 
 export {
   centerOnResult,

@@ -3079,20 +3079,27 @@
     }
   }, { passive: false });
   var dragging = false;
+  var dragButton = -1;
   var dragStartX = 0;
   var dragStartY = 0;
   var dragScrollX = 0;
   var dragScrollY = 0;
   canvasScroll.addEventListener("mousedown", async (e) => {
+    if (e.button !== 0 && e.button !== 1) return;
     if (e.target.closest(".result-item")) return;
     if (S.mode === "markup") return;
-    const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
-    if (hit) {
-      selectStroke(hit.id);
-      return;
+    if (e.button === 1) {
+      e.preventDefault();
+    } else {
+      const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
+      if (hit) {
+        selectStroke(hit.id);
+        return;
+      }
+      if (S.selectedMarkupId) selectStroke(null);
     }
-    if (S.selectedMarkupId) selectStroke(null);
     dragging = true;
+    dragButton = e.button;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     dragScrollX = canvasScroll.scrollLeft;
@@ -3104,8 +3111,10 @@
     canvasScroll.scrollLeft = dragScrollX - (e.clientX - dragStartX);
     canvasScroll.scrollTop = dragScrollY - (e.clientY - dragStartY);
   });
-  window.addEventListener("mouseup", () => {
+  window.addEventListener("mouseup", (e) => {
+    if (!dragging || e.button !== dragButton) return;
     dragging = false;
+    dragButton = -1;
     canvasScroll.style.cursor = "";
   });
 
