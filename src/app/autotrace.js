@@ -11,6 +11,30 @@ import { extractVectorSegments, buildLineGraph, anchorPointForTag, traceFromAnch
 // manual polyline tool with it (see seedPolyline() in markup.js) so the user
 // reviews/extends/commits it themselves rather than trusting a blind guess.
 // =======================================================================
+
+// Extracts (and caches, per page) the vector line graph. Deliberately not
+// gated on pageHasImage()/pageIsVector() — a page can carry a raster logo or
+// watermark (forcing OCR for that image) while the rest of the drawing is
+// still real stroked vector linework, and that linework is exactly what
+// this needs. So the graph is what actually decides "is there anything
+// here to trace", not whether the page happens to contain any image at all.
+async function getPageLineGraph(pageNum) {
+  const data = S.pageData.get(pageNum);
+  if (!data.vectorGraph) {
+    const page = await getPageProxy(pageNum);
+    const { segments, filledShapes } = await extractVectorSegments(page);
+    data.vectorGraph = buildLineGraph(segments, filledShapes);
+  }
+  return data.vectorGraph;
+}
+
+// Whether a page has any traceable vector line at all — used to decide
+// whether the "Mark up" button is worth offering on a given result.
+async function pageHasVectorLines(pageNum) {
+  const graph = await getPageLineGraph(pageNum);
+  return graph.edges.length > 0;
+}
+
 async function startAutoTrace(i) {
   const res = S.lastResults[i];
   if (!res || res.source !== 'text') return;
@@ -18,17 +42,14 @@ async function startAutoTrace(i) {
 
   const page = await getPageProxy(res.page);
   const data = S.pageData.get(res.page);
-  if (!data.vectorGraph) {
-    const { segments, filledShapes } = await extractVectorSegments(page);
-    data.vectorGraph = buildLineGraph(segments, filledShapes);
-  }
+  const graph = await getPageLineGraph(res.page);
 
   const pts = [];
   for (const idx of res.itemIndices) pts.push(...itemQuadPdfSpace(data.textItems[idx]));
   const tagBbox = boundsOfPoints(pts);
 
-  const anchor = anchorPointForTag(data.vectorGraph, tagBbox);
-  const tracedPdfPoints = anchor ? traceFromAnchor(data.vectorGraph, anchor) : null;
+  const anchor = anchorPointForTag(graph, tagBbox);
+  const tracedPdfPoints = anchor ? traceFromAnchor(graph, anchor) : null;
 
   const viewport = page.getViewport({ scale: S.scale });
   if (tracedPdfPoints && tracedPdfPoints.length >= 2) {
@@ -42,4 +63,4 @@ async function startAutoTrace(i) {
   }
 }
 
-export { startAutoTrace };
+export { startAutoTrace, pageHasVectorLines };

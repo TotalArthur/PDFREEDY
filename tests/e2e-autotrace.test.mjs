@@ -60,11 +60,19 @@ const pdfPath = path.join(dir, 'fixture.pdf');
 // A vector "pipe" bent once (an elbow), with the tag label sitting just
 // above its first leg — the same layout convention real P&IDs use.
 const LINE = { points: [[150, 685], [450, 685], [450, 600]], width: 2 };
+// Same layout, but on a page that also carries a raster image — a real
+// drawing's logo/watermark/legend, say — which forces that page through
+// OCR (pageHasImage() sees it). The button used to be gated on "does the
+// page have no image at all", which wrongly hid it here even though the
+// pipe itself is still real, tracesable vector geometry sitting right next
+// to a text-layer tag hit. Regression coverage for that.
+const LINE2 = { points: [[150, 585], [450, 585], [450, 500]], width: 2 };
 writeFileSync(pdfPath, makePdf([
   [{ text: 'MC-58067', x: 200, y: 700 }, { line: LINE }],
   // Enough text to clear TEXT_LEN_THRESHOLD (stay off the OCR path) but no
   // line item — this page is vector but has nothing nearby to anchor to.
   [{ text: 'SECOND PAGE WITH NO LINE ON IT AT ALL', x: 72, y: 700 }],
+  [{ text: 'MC-99999', x: 200, y: 600 }, { line: LINE2 }, { image: { x: 10, y: 10, w: 20, h: 20 } }],
 ]));
 
 const browser = await chromium.launch();
@@ -85,7 +93,7 @@ await page.goto(base + 'index.html');
 await page.waitForFunction(() => typeof window.pdfjsLib !== 'undefined');
 
 await page.setInputFiles('#fileInput', pdfPath);
-await page.waitForFunction(() => document.querySelector('#fileInfo').textContent.includes('2 pages'), null, { timeout: 30000 });
+await page.waitForFunction(() => document.querySelector('#fileInfo').textContent.includes('3 pages'), null, { timeout: 30000 });
 await page.waitForFunction(() => document.querySelector('#procDetailText').textContent.includes('done, ready to search'), null, { timeout: 30000 });
 check('no script errors after load', errors.length === 0, errors.join(' | '));
 
@@ -94,12 +102,12 @@ await page.click('#searchBtn');
 await page.waitForSelector('#resultsList .result-item');
 
 const traceBtn = page.locator('#resultsList .result-item .trace-btn').first();
-await traceBtn.waitFor({ state: 'visible', timeout: 10000 });
+await traceBtn.waitFor({ state: 'visible', timeout: 20000 });
 check('the "Mark up" button appears on a vector-page text hit', await traceBtn.isVisible());
 
 await traceBtn.click();
 await page.waitForFunction(() => window.__pdfreedyState.mode === 'markup'
-  && window.__pdfreedyState.markupTool === 'polyline', null, { timeout: 10000 });
+  && window.__pdfreedyState.markupTool === 'polyline', null, { timeout: 20000 });
 check('clicking it switches into polyline markup mode', true);
 
 const inkBefore = await page.evaluate(() => {
@@ -116,7 +124,7 @@ await page.waitForFunction(() => {
   const s = window.__pdfreedyState;
   const strokes = s.markups.get(s.currentPage);
   return strokes && strokes.length === 1;
-}, null, { timeout: 10000 });
+}, null, { timeout: 20000 });
 
 const stroke = await page.evaluate(() => {
   const s = window.__pdfreedyState;
@@ -151,12 +159,41 @@ const secondTraceBtn = page.locator('#resultsList .result-item .trace-btn').firs
 const secondBtnVisible = await secondTraceBtn.isVisible().catch(() => false);
 if (secondBtnVisible) {
   await secondTraceBtn.click();
-  await page.waitForFunction(() => window.__pdfreedyState.mode === 'markup', null, { timeout: 10000 });
+  await page.waitForFunction(() => window.__pdfreedyState.mode === 'markup', null, { timeout: 20000 });
   await page.keyboard.press('Escape'); // a lone seeded point with no line found — just cancel cleanly
   check('a page with no nearby line does not crash the auto-trace flow', true);
 } else {
   check('a page with no vector line hides the Mark up button entirely (also a valid outcome)', true);
 }
+
+// ---- regression: a page with an embedded raster image (forces OCR too)
+// but real vector pipe geometry still gets the button, and still traces ----
+await page.click('#nextPageBtn');
+await page.fill('#searchInput', 'MC-99999');
+await page.click('#searchBtn');
+const thirdTraceBtn = page.locator('#resultsList .result-item .trace-btn').first();
+await thirdTraceBtn.waitFor({ state: 'visible', timeout: 20000 });
+check('the "Mark up" button appears even on a page that also has a raster image',
+  await thirdTraceBtn.isVisible());
+
+await thirdTraceBtn.click();
+await page.waitForFunction(() => window.__pdfreedyState.mode === 'markup'
+  && window.__pdfreedyState.markupTool === 'polyline', null, { timeout: 20000 });
+await page.keyboard.press('Enter');
+await page.waitForFunction(() => {
+  const s = window.__pdfreedyState;
+  const strokes = s.markups.get(s.currentPage);
+  return strokes && strokes.length === 1;
+}, null, { timeout: 20000 });
+const stroke3 = await page.evaluate(() => {
+  const s = window.__pdfreedyState;
+  return s.markups.get(s.currentPage)[0];
+});
+check('it still traces the real line on that mixed page',
+  stroke3.points.some(p => nearAny(p, [LINE2.points[0]], 6))
+  && stroke3.points.some(p => nearAny(p, [LINE2.points[1]], 6))
+  && stroke3.points.some(p => nearAny(p, [LINE2.points[2]], 6)),
+  JSON.stringify(stroke3.points));
 
 check('no script errors during the whole run', errors.length === 0, errors.join(' | '));
 

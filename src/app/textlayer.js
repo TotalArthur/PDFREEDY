@@ -54,25 +54,6 @@ async function extractTextLayer(pageNum) {
   return confidentTextLayer;
 }
 
-// True when a page carries no embedded raster image — i.e. its content is
-// drawn with real vector path operators, so getOperatorList() exposes actual
-// line/pipe geometry an auto-trace can walk (see lib/vectorlines.js), rather
-// than the page being a scan with nothing but pixels to trace. Deliberately
-// independent of how much real text the page has (that's TEXT_LEN_THRESHOLD's
-// job, for deciding whether OCR is needed) — a sparse vector page is still a
-// vector page.
-async function pageIsVector(pageNum) {
-  const data = S.pageData.get(pageNum);
-  if (!data) return false;
-  let hasImage = data.hasImage;
-  if (hasImage === undefined) {
-    const page = await getPageProxy(pageNum);
-    hasImage = await pageHasImage(page);
-    data.hasImage = hasImage;
-  }
-  return !hasImage;
-}
-
 function groupItemsIntoLines(items) {
   // Each item has .transform [a,b,c,d,e,f]. Rotation angle + baseline point
   // let us cluster items that sit on the same (possibly rotated) line.
@@ -146,6 +127,5 @@ export {
   extractTextLayer,
   groupItemsIntoLines,
   pageHasImage,
-  pageIsVector,
   searchTextLayer,
 };
