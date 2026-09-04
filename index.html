@@ -2429,21 +2429,31 @@
   }
 
   // src/app/autotrace.js
+  async function getPageLineGraph(pageNum) {
+    const data = S.pageData.get(pageNum);
+    if (!data.vectorGraph) {
+      const page = await getPageProxy(pageNum);
+      const { segments, filledShapes } = await extractVectorSegments(page);
+      data.vectorGraph = buildLineGraph(segments, filledShapes);
+    }
+    return data.vectorGraph;
+  }
+  async function pageHasVectorLines(pageNum) {
+    const graph = await getPageLineGraph(pageNum);
+    return graph.edges.length > 0;
+  }
   async function startAutoTrace(i) {
     const res = S.lastResults[i];
     if (!res || res.source !== "text") return;
     await jumpToResult(i);
     const page = await getPageProxy(res.page);
     const data = S.pageData.get(res.page);
-    if (!data.vectorGraph) {
-      const { segments, filledShapes } = await extractVectorSegments(page);
-      data.vectorGraph = buildLineGraph(segments, filledShapes);
-    }
+    const graph = await getPageLineGraph(res.page);
     const pts = [];
     for (const idx of res.itemIndices) pts.push(...itemQuadPdfSpace(data.textItems[idx]));
     const tagBbox = boundsOfPoints(pts);
-    const anchor = anchorPointForTag(data.vectorGraph, tagBbox);
-    const tracedPdfPoints = anchor ? traceFromAnchor(data.vectorGraph, anchor) : null;
+    const anchor = anchorPointForTag(graph, tagBbox);
+    const tracedPdfPoints = anchor ? traceFromAnchor(graph, anchor) : null;
     const viewport = page.getViewport({ scale: S.scale });
     if (tracedPdfPoints && tracedPdfPoints.length >= 2) {
       seedPolyline(tracedPdfPoints.map(([x, y]) => applyMatrix(viewport.transform, x, y)));
@@ -2496,8 +2506,8 @@
         startAutoTrace(i);
       });
       topRow.appendChild(traceBtn);
-      pageIsVector(res.page).then((isVector) => {
-        traceBtn.hidden = !isVector;
+      pageHasVectorLines(res.page).then((hasLines) => {
+        traceBtn.hidden = !hasLines;
       });
     }
     meta.appendChild(topRow);
@@ -3178,17 +3188,6 @@
       data.status = "text-done";
     }
     return confidentTextLayer;
-  }
-  async function pageIsVector(pageNum) {
-    const data = S.pageData.get(pageNum);
-    if (!data) return false;
-    let hasImage = data.hasImage;
-    if (hasImage === void 0) {
-      const page = await getPageProxy(pageNum);
-      hasImage = await pageHasImage(page);
-      data.hasImage = hasImage;
-    }
-    return !hasImage;
   }
   function groupItemsIntoLines(items) {
     const enriched = items.map((it, idx) => {

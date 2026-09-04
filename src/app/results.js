@@ -5,10 +5,9 @@ import { itemQuadCanvas, boundsOfPoints } from '../lib/geometry.js';
 import { confidencePercent } from '../lib/evidence.js';
 import { setCorrection } from './corrections.js';
 import { getPageProxy } from './pdf.js';
-import { pageIsVector } from './textlayer.js';
 import { runFullSearch } from './search.js';
 import { jumpToResult } from './viewer.js';
-import { startAutoTrace } from './autotrace.js';
+import { startAutoTrace, pageHasVectorLines } from './autotrace.js';
 import {
   resultsList,
 } from './dom.js';
@@ -63,9 +62,12 @@ function buildResultElement(res, i) {
     });
     topRow.appendChild(fixBtn);
   } else if (res.source === 'text') {
-    // Only offered on native vector pages, where the PDF's own line/pipe
-    // geometry is readable — checked async since it needs the operator
-    // list, so the button starts hidden and appears once that resolves.
+    // Only offered where the page actually has traceable vector line
+    // geometry — checked async since it needs the operator list parsed
+    // (cached per page after the first check), so the button starts hidden
+    // and appears once that resolves. Not the same thing as "page has no
+    // image": a drawing can carry a raster logo/watermark (forcing OCR for
+    // that image) while still being full of real stroked pipe linework.
     const traceBtn = document.createElement('button');
     traceBtn.className = 'trace-btn';
     traceBtn.textContent = 'Mark up';
@@ -76,7 +78,7 @@ function buildResultElement(res, i) {
       startAutoTrace(i);
     });
     topRow.appendChild(traceBtn);
-    pageIsVector(res.page).then(isVector => { traceBtn.hidden = !isVector; });
+    pageHasVectorLines(res.page).then(hasLines => { traceBtn.hidden = !hasLines; });
   }
   meta.appendChild(topRow);
 
