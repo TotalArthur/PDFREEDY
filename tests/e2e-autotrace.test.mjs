@@ -67,12 +67,26 @@ const LINE = { points: [[150, 685], [450, 685], [450, 600]], width: 2 };
 // pipe itself is still real, tracesable vector geometry sitting right next
 // to a text-layer tag hit. Regression coverage for that.
 const LINE2 = { points: [[150, 585], [450, 585], [450, 500]], width: 2 };
+
+// Page 4: the exact reported failure. A short diagonal leader line sits
+// right against the label (closer than the pipe itself — that's a leader's
+// whole job), and the real pipe runs on through an unfilled valve icon
+// (drawn as one continuous stroke, the valve overlaid on top rather than
+// breaking it — a common CAD export convention) all the way to a distant,
+// unrelated point. A wrong trace either grabs the leader, or runs straight
+// through the valve to that distant point; a correct one follows the real
+// pipe and stops right at the valve.
+const LEADER = { points: [[210, 695], [225, 665]], width: 1 }; // diagonal, ~18° off-grid, very close to the label
+const PIPE4 = { points: [[150, 650], [300, 650], [300, 400]], width: 2 }; // one continuous stroke, valve overlaid mid-run
+const VALVE4 = { points: [[290, 640], [310, 640], [300, 662]], width: 1, closed: true }; // outline-only, unfilled
+
 writeFileSync(pdfPath, makePdf([
   [{ text: 'MC-58067', x: 200, y: 700 }, { line: LINE }],
   // Enough text to clear TEXT_LEN_THRESHOLD (stay off the OCR path) but no
   // line item — this page is vector but has nothing nearby to anchor to.
   [{ text: 'SECOND PAGE WITH NO LINE ON IT AT ALL', x: 72, y: 700 }],
   [{ text: 'MC-99999', x: 200, y: 600 }, { line: LINE2 }, { image: { x: 10, y: 10, w: 20, h: 20 } }],
+  [{ text: 'MC-88888', x: 200, y: 700 }, { line: LEADER }, { line: PIPE4 }, { line: VALVE4 }],
 ]));
 
 const browser = await chromium.launch();
@@ -93,7 +107,7 @@ await page.goto(base + 'index.html');
 await page.waitForFunction(() => typeof window.pdfjsLib !== 'undefined');
 
 await page.setInputFiles('#fileInput', pdfPath);
-await page.waitForFunction(() => document.querySelector('#fileInfo').textContent.includes('3 pages'), null, { timeout: 30000 });
+await page.waitForFunction(() => document.querySelector('#fileInfo').textContent.includes('4 pages'), null, { timeout: 30000 });
 await page.waitForFunction(() => document.querySelector('#procDetailText').textContent.includes('done, ready to search'), null, { timeout: 30000 });
 check('no script errors after load', errors.length === 0, errors.join(' | '));
 
@@ -200,6 +214,33 @@ check('it still traces the real line on that mixed page',
   && stroke3.points.some(p => nearAny(p, [LINE2.points[1]], 6))
   && stroke3.points.some(p => nearAny(p, [LINE2.points[2]], 6)),
   JSON.stringify(stroke3.points));
+
+// ---- regression: the exact reported bug — a close diagonal leader line
+// next to the label, and a valve icon straddling the real pipe further on ----
+await page.click('#nextPageBtn');
+await page.fill('#searchInput', 'MC-88888');
+await page.click('#searchBtn');
+const fourthTraceBtn = page.locator('#resultsList .result-item .trace-btn').first();
+await fourthTraceBtn.waitFor({ state: 'visible', timeout: 20000 });
+
+await page.evaluate(() => { window.__pdfreedyState.mode = 'view'; });
+await fourthTraceBtn.click();
+await page.waitForFunction(() => window.__pdfreedyState.mode === 'markup'
+  && window.__pdfreedyState.markupTool === 'polyline', null, { timeout: 20000 });
+await page.keyboard.press('Enter');
+await page.waitForFunction(() => {
+  const s = window.__pdfreedyState;
+  const strokes = s.markups.get(s.currentPage);
+  return strokes && strokes.length === 1;
+}, null, { timeout: 20000 });
+const stroke4 = await page.evaluate(() => {
+  const s = window.__pdfreedyState;
+  return s.markups.get(s.currentPage)[0];
+});
+check('it follows the real pipe, not the closer diagonal leader line',
+  stroke4.points.some(p => nearAny(p, [PIPE4.points[0]], 6)), JSON.stringify(stroke4.points));
+check('it stops at the valve icon instead of running through it to the distant point',
+  !stroke4.points.some(p => nearAny(p, [PIPE4.points[2]], 6)), JSON.stringify(stroke4.points));
 
 check('no script errors during the whole run', errors.length === 0, errors.join(' | '));
 
