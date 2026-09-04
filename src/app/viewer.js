@@ -149,12 +149,12 @@ async function drawHighlights() {
     if (res.source === 'text') {
       for (const idx of res.itemIndices) {
         const it = data.textItems[idx];
-        strokePoly(itemQuadCanvas(it, viewport));
+        strokePoly(padQuad(itemQuadCanvas(it, viewport), HIGHLIGHT_PAD));
       }
     } else {
       const ratio = S.scale / data.thumbScale;
       const x0 = res.bbox.x0*ratio, y0 = res.bbox.y0*ratio, x1 = res.bbox.x1*ratio, y1 = res.bbox.y1*ratio;
-      strokePoly([[x0,y0],[x1,y0],[x1,y1],[x0,y1]]);
+      strokePoly(padQuad([[x0,y0],[x1,y0],[x1,y1],[x0,y1]], HIGHLIGHT_PAD));
     }
     // Never let shadow/alpha state bleed into the next box or into the
     // markup strokes drawMarkups() paints right after this function returns.
@@ -167,6 +167,22 @@ async function drawHighlights() {
   // (both redraw the same overlay), so it's paused for the duration.
   if (activeResultOnThisPage() && S.mode !== 'markup') schedulePulse();
   else stopPulse();
+}
+
+// A box drawn exactly glyph-tight hugs the text closely enough to obscure
+// it rather than highlight it. Push every vertex outward from the quad's
+// centroid by a fixed screen-pixel amount — this gives an even margin on
+// all sides regardless of the quad's rotation, unlike padding x/y ranges
+// independently (which only works for an axis-aligned box).
+const HIGHLIGHT_PAD = 5;
+function padQuad(pts, pad) {
+  const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  return pts.map(([x, y]) => {
+    const dx = x - cx, dy = y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    return [x + dx/len*pad, y + dy/len*pad];
+  });
 }
 
 // Traces a soft-cornered version of an arbitrary (possibly rotated) quad —

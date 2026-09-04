@@ -41,4 +41,9 @@ const S = {
   fileName: '',
 };
 
+// Test-only observability hook (see tests/e2e.test.mjs, tests/e2e-markup.test.mjs):
+// lets a test inspect raw per-source extraction (e.g. OCR word data) directly,
+// independent of what the deduped/merged results list ends up showing.
+if (typeof window !== 'undefined') window.__pdfreedyState = S;
+
 export { S };
