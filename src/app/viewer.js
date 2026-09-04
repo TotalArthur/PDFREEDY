@@ -44,7 +44,11 @@ async function renderPage(pageNum) {
   }
   if (!S.pdfDoc) return;
 
-  S.currentPage = clamp(pageNum, 1, S.numPages);
+  const newPage = clamp(pageNum, 1, S.numPages);
+  // A stroke selected for deletion belongs to the page it's drawn on — a
+  // real page change (not a same-page re-render for zoom) leaves it behind.
+  if (newPage !== S.currentPage) S.selectedMarkupId = null;
+  S.currentPage = newPage;
   pageNumInput.value = S.currentPage;
   const page = await getPageProxy(S.currentPage);
   const viewport = page.getViewport({ scale: S.scale });
@@ -224,6 +228,23 @@ async function drawMarkups() {
   for (const s of strokes) {
     if (s.points.length < 2) continue;
     const canvasPts = s.points.map(([x,y]) => applyMatrix(viewport.transform, x, y));
+
+    if (s.id === S.selectedMarkupId) {
+      // A wider dashed halo under the stroke, so a selected line is
+      // unambiguous at a glance — click-to-select needs visible feedback.
+      overlayCtx.save();
+      overlayCtx.strokeStyle = 'rgba(94,169,255,0.9)';
+      overlayCtx.lineWidth = Math.max(1, s.width * S.scale) + 6;
+      overlayCtx.lineJoin = 'round';
+      overlayCtx.lineCap = 'round';
+      overlayCtx.setLineDash([6, 4]);
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(canvasPts[0][0], canvasPts[0][1]);
+      for (let i = 1; i < canvasPts.length; i++) overlayCtx.lineTo(canvasPts[i][0], canvasPts[i][1]);
+      overlayCtx.stroke();
+      overlayCtx.restore();
+    }
+
     overlayCtx.strokeStyle = s.color;
     overlayCtx.lineWidth = Math.max(1, s.width * S.scale);
     overlayCtx.globalAlpha = s.opacity == null ? 1 : s.opacity;

@@ -225,34 +225,68 @@ const freshBox = await page.locator('#overlayCanvas').boundingBox();
 }
 
 // ---- point-to-point tool: click three points, Enter to finish ----
+let abMidpoint, bcMidpoint;
 {
-  check('markup hint is hidden for the drag tools', await page.isHidden('#markupHint'));
+  check('hint icon is hidden for the drag tools', await page.isHidden('#markupHintWrap'));
   await page.selectOption('#markupToolSelect', 'polyline');
-  check('markup hint appears once the point-to-point tool is selected', await page.isVisible('#markupHint'));
+  check('hint icon appears once the point-to-point tool is selected', await page.isVisible('#markupHintWrap'));
+  check('hint popover starts closed', await page.isHidden('#markupHintPopover'));
+
+  await page.click('#markupHintBtn');
+  check('clicking the hint icon opens the popover', await page.isVisible('#markupHintPopover'));
+  await page.click('#markupHintCloseBtn');
+  check('the popover\'s own close button closes it', await page.isHidden('#markupHintPopover'));
+
+  await page.click('#markupHintBtn');
+  await page.click('#pageCountLabel'); // click elsewhere in the toolbar
+  check('clicking outside the popover closes it', await page.isHidden('#markupHintPopover'));
 
   const pA = { x: freshBox.x + 120, y: freshBox.y + 420 };
   const pB = { x: freshBox.x + 260, y: freshBox.y + 420 };
   const pC = { x: freshBox.x + 260, y: freshBox.y + 480 };
+  abMidpoint = { x: (pA.x + pB.x) / 2, y: pA.y };
+  bcMidpoint = { x: pB.x, y: (pB.y + pC.y) / 2 };
   await page.mouse.click(pA.x, pA.y);
   await page.mouse.click(pB.x, pB.y);
   await page.mouse.click(pC.x, pC.y);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(150);
 
-  const midAB = await alphaAt((pA.x + pB.x) / 2 - freshBox.x, pA.y - freshBox.y);
-  const midBC = await alphaAt(pB.x - freshBox.x, (pB.y + pC.y) / 2 - freshBox.y);
+  const midAB = await alphaAt(abMidpoint.x - freshBox.x, abMidpoint.y - freshBox.y);
+  const midBC = await alphaAt(bcMidpoint.x - freshBox.x, bcMidpoint.y - freshBox.y);
   check('point-to-point tool paints the first (A-B) segment', midAB > 0, String(midAB));
   check('point-to-point tool paints the second (B-C) segment, proving all 3 clicks were used',
     midBC > 0, String(midBC));
 
   // ---- Escape cancels an in-progress polyline without committing anything ----
-  const cancelPt = { x: freshBox.x + 420, y: freshBox.y + 420 };
+  const cancelPt = { x: freshBox.x + 500, y: freshBox.y + 420 };
   await page.mouse.click(cancelPt.x, cancelPt.y);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(150);
   const alphaAfterCancel = await alphaAt(cancelPt.x - freshBox.x, cancelPt.y - freshBox.y);
   check('Escape cancels an in-progress point-to-point line without painting anything',
     alphaAfterCancel === 0, String(alphaAfterCancel));
+}
+
+// ---- select a drawn line by clicking it, then delete it with Backspace ----
+{
+  check('undo enabled before delete test (the point-to-point line exists)', await page.isEnabled('#markupUndoBtn'));
+
+  // Click on the middle of the B-C segment drawn above — a point ON the
+  // line, not near an endpoint, to prove hit-testing checks the segment
+  // itself and not just its clicked vertices.
+  await page.mouse.click(bcMidpoint.x, bcMidpoint.y);
+  await page.waitForTimeout(150);
+  const selectionHaloAlpha = await alphaAt(bcMidpoint.x - freshBox.x, bcMidpoint.y - freshBox.y);
+  check('clicking on a drawn line paints a selection halo (wider than the line alone)',
+    selectionHaloAlpha > 0, String(selectionHaloAlpha));
+
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(150);
+  const afterDeleteAB = await alphaAt(abMidpoint.x - freshBox.x, abMidpoint.y - freshBox.y);
+  const afterDeleteBC = await alphaAt(bcMidpoint.x - freshBox.x, bcMidpoint.y - freshBox.y);
+  check('Backspace deletes the selected line (both its segments are gone)',
+    afterDeleteAB === 0 && afterDeleteBC === 0, `AB=${afterDeleteAB} BC=${afterDeleteBC}`);
 }
 
 // ---- exit markup mode, confirm panning works again ----

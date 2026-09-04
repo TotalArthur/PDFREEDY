@@ -287,7 +287,26 @@
     padding: 5px 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2);
     color: var(--text); font-size: 13px;
   }
-  #markupHint { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+  .hint-wrap { position: relative; display: inline-flex; }
+  .hint-wrap[hidden] { display: none; }
+  #markupHintBtn {
+    width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text-dim); cursor: pointer; font-size: 15px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  #markupHintBtn:hover { color: var(--text); border-color: var(--accent); }
+  .hint-popover {
+    position: absolute; top: 32px; left: 0; z-index: 20; width: 260px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 26px 10px 12px; font-size: 12px; color: var(--text); line-height: 1.5;
+    box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  }
+  .hint-close {
+    position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; padding: 0;
+    border: none; background: none; color: var(--text-dim); cursor: pointer; font-size: 15px;
+    line-height: 1; border-radius: 4px;
+  }
+  .hint-close:hover { color: var(--text); background: #3a3d42; }
   .page-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }
   .page-badge.text { background: #274a2e; color: var(--good); }
   .page-badge.ocr { background: #4a3d1c; color: var(--warn); }
@@ -417,7 +436,13 @@
           <option value="line">Straight line</option>
           <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
         </select>
-        <span id="markupHint" hidden>Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel</span>
+        <span class="hint-wrap" hidden id="markupHintWrap">
+          <button id="markupHintBtn" class="icon-btn" title="How point to point works" aria-label="How point to point works">&#9432;</button>
+          <div id="markupHintPopover" class="hint-popover" hidden role="tooltip">
+            <button id="markupHintCloseBtn" class="hint-close" aria-label="Close">&times;</button>
+            Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel
+          </div>
+        </span>
         <input type="color" id="markupColorInput" value="#ff3b30" title="Markup color">
         <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
         <span id="markupWidthLabel">3px</span>

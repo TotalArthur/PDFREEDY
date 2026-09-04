@@ -1,11 +1,14 @@
 import { S } from './state.js';
-import { pdfPointFromCanvas } from '../lib/geometry.js';
+import { pdfPointFromCanvas, applyMatrix } from '../lib/geometry.js';
 import { getPageProxy } from './pdf.js';
 import { drawHighlights, drawMarkups } from './viewer.js';
 import {
   pencilBtn,
   markupToolSelect,
-  markupHint,
+  markupHintWrap,
+  markupHintBtn,
+  markupHintPopover,
+  markupHintCloseBtn,
   markupColorInput,
   markupWidthInput,
   markupWidthLabel,
@@ -33,6 +36,16 @@ function syncMarkupModeUI() {
   overlayCanvas.classList.toggle('markup-active', active);
 }
 
+function selectStroke(id) {
+  if (S.selectedMarkupId === id) return;
+  S.selectedMarkupId = id;
+  refreshOverlay();
+}
+
+function closeHintPopover() {
+  markupHintPopover.hidden = true;
+}
+
 function updateMarkupButtons() {
   const strokes = S.markups.get(S.currentPage);
   const hasOnPage = !!(strokes && strokes.length);
@@ -55,6 +68,32 @@ function canvasPointFromEvent(e) {
   const scaleX = overlayCanvas.width / rect.width;
   const scaleY = overlayCanvas.height / rect.height;
   return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
+}
+
+function distToSegment(p, a, b) {
+  const dx = b[0]-a[0], dy = b[1]-a[1];
+  const lenSq = dx*dx + dy*dy;
+  const t = lenSq ? Math.max(0, Math.min(1, ((p[0]-a[0])*dx + (p[1]-a[1])*dy) / lenSq)) : 0;
+  return Math.hypot(p[0] - (a[0]+t*dx), p[1] - (a[1]+t*dy));
+}
+
+// Finds the topmost (most recently drawn) stroke on the current page whose
+// line passes near `pt` (canvas-space), so a click can select a specific
+// markup for deletion instead of always starting a new one.
+async function hitTestStroke(pt) {
+  const strokes = S.markups.get(S.currentPage);
+  if (!strokes || !strokes.length) return null;
+  const page = await getPageProxy(S.currentPage);
+  const viewport = page.getViewport({ scale: S.scale });
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    const s = strokes[i];
+    const canvasPts = s.points.map(([x, y]) => applyMatrix(viewport.transform, x, y));
+    const tolerance = Math.max(6, s.width * S.scale / 2 + 4);
+    for (let j = 1; j < canvasPts.length; j++) {
+      if (distToSegment(pt, canvasPts[j-1], canvasPts[j]) <= tolerance) return s;
+    }
+  }
+  return null;
 }
 
 function drawSegment(p0, p1) {
@@ -98,14 +137,27 @@ function commitStroke(tool, canvasPts) {
 pencilBtn.addEventListener('click', () => {
   if (!S.pdfDoc) return;
   S.mode = S.mode === 'markup' ? 'view' : 'markup';
-  if (S.mode !== 'markup') cancelPolyline();
+  if (S.mode !== 'markup') { cancelPolyline(); selectStroke(null); }
   syncMarkupModeUI();
 });
 
 markupToolSelect.addEventListener('change', () => {
   cancelPolyline(); // switching tools mid-polyline abandons it
+  selectStroke(null);
   S.markupTool = markupToolSelect.value;
-  markupHint.hidden = S.markupTool !== 'polyline';
+  markupHintWrap.hidden = S.markupTool !== 'polyline';
+  if (markupHintWrap.hidden) closeHintPopover();
+});
+markupHintBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  markupHintPopover.hidden = !markupHintPopover.hidden;
+});
+markupHintCloseBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeHintPopover();
+});
+document.addEventListener('click', (e) => {
+  if (!markupHintPopover.hidden && !markupHintWrap.contains(e.target)) closeHintPopover();
 });
 markupColorInput.addEventListener('input', () => {
   S.markupColor = markupColorInput.value;
@@ -123,11 +175,15 @@ markupOpacityInput.addEventListener('input', () => {
 let drawingActive = false;
 let currentPoints = []; // canvas-space, while a stroke is in progress
 
-overlayCanvas.addEventListener('mousedown', (e) => {
+overlayCanvas.addEventListener('mousedown', async (e) => {
   if (S.mode !== 'markup' || !S.pdfDoc || S.markupTool === 'polyline') return;
-  drawingActive = true;
-  currentPoints = [canvasPointFromEvent(e)];
   e.preventDefault();
+  const pt = canvasPointFromEvent(e);
+  const hit = await hitTestStroke(pt);
+  if (hit) { selectStroke(hit.id); return; }
+  if (S.selectedMarkupId) selectStroke(null);
+  drawingActive = true;
+  currentPoints = [pt];
 });
 
 window.addEventListener('mousemove', async (e) => {
@@ -176,10 +232,15 @@ async function finishPolyline(pts) {
   await commitStroke('polyline', pts);
 }
 
-overlayCanvas.addEventListener('click', (e) => {
+overlayCanvas.addEventListener('click', async (e) => {
   if (S.mode !== 'markup' || !S.pdfDoc || S.markupTool !== 'polyline') return;
   const pt = canvasPointFromEvent(e);
   if (!polylineActive()) {
+    // Only the click that starts a fresh polyline can select instead of
+    // draw — once points are being chained, every click adds the next one.
+    const hit = await hitTestStroke(pt);
+    if (hit) { selectStroke(hit.id); return; }
+    if (S.selectedMarkupId) selectStroke(null);
     polylinePoints = [pt];
     return;
   }
@@ -213,11 +274,37 @@ window.addEventListener('mousemove', async (e) => {
   drawPolyline([...polylinePoints, pt]);
 });
 
+// ---- select-to-delete: click a drawn line (above), then Delete/Backspace ----
+async function deleteSelectedStroke() {
+  const strokes = S.markups.get(S.currentPage);
+  const idx = strokes ? strokes.findIndex(s => s.id === S.selectedMarkupId) : -1;
+  if (idx === -1) return;
+  strokes.splice(idx, 1);
+  S.selectedMarkupId = null;
+  await refreshOverlay();
+  updateMarkupButtons();
+}
+
+window.addEventListener('keydown', async (e) => {
+  if (S.mode !== 'markup' || !S.selectedMarkupId) return;
+  // Don't hijack Backspace/Delete/Escape while the user is typing elsewhere
+  // (search box, page-number field, color/width inputs, ...).
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    await deleteSelectedStroke();
+  } else if (e.key === 'Escape') {
+    selectStroke(null);
+  }
+});
+
 // ---- undo / clear ----
 markupUndoBtn.addEventListener('click', async () => {
   const strokes = S.markups.get(S.currentPage);
   if (!strokes || !strokes.length) return;
-  strokes.pop();
+  const removed = strokes.pop();
+  if (S.selectedMarkupId === removed.id) S.selectedMarkupId = null;
   await refreshOverlay();
   updateMarkupButtons();
 });
@@ -226,6 +313,7 @@ markupClearBtn.addEventListener('click', async () => {
   const strokes = S.markups.get(S.currentPage);
   if (!strokes || !strokes.length) return;
   S.markups.set(S.currentPage, []);
+  S.selectedMarkupId = null;
   await refreshOverlay();
   updateMarkupButtons();
 });

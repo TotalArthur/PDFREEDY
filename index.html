@@ -287,7 +287,26 @@
     padding: 5px 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2);
     color: var(--text); font-size: 13px;
   }
-  #markupHint { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+  .hint-wrap { position: relative; display: inline-flex; }
+  .hint-wrap[hidden] { display: none; }
+  #markupHintBtn {
+    width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text-dim); cursor: pointer; font-size: 15px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  #markupHintBtn:hover { color: var(--text); border-color: var(--accent); }
+  .hint-popover {
+    position: absolute; top: 32px; left: 0; z-index: 20; width: 260px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 26px 10px 12px; font-size: 12px; color: var(--text); line-height: 1.5;
+    box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  }
+  .hint-close {
+    position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; padding: 0;
+    border: none; background: none; color: var(--text-dim); cursor: pointer; font-size: 15px;
+    line-height: 1; border-radius: 4px;
+  }
+  .hint-close:hover { color: var(--text); background: #3a3d42; }
   .page-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }
   .page-badge.text { background: #274a2e; color: var(--good); }
   .page-badge.ocr { background: #4a3d1c; color: var(--warn); }
@@ -417,7 +436,13 @@
           <option value="line">Straight line</option>
           <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
         </select>
-        <span id="markupHint" hidden>Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel</span>
+        <span class="hint-wrap" hidden id="markupHintWrap">
+          <button id="markupHintBtn" class="icon-btn" title="How point to point works" aria-label="How point to point works">&#9432;</button>
+          <div id="markupHintPopover" class="hint-popover" hidden role="tooltip">
+            <button id="markupHintCloseBtn" class="hint-close" aria-label="Close">&times;</button>
+            Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel
+          </div>
+        </span>
         <input type="color" id="markupColorInput" value="#ff3b30" title="Markup color">
         <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
         <span id="markupWidthLabel">3px</span>
@@ -498,7 +523,10 @@
   var zoomResetBtn = $("zoomResetBtn");
   var pencilBtn = $("pencilBtn");
   var markupToolSelect = $("markupToolSelect");
-  var markupHint = $("markupHint");
+  var markupHintWrap = $("markupHintWrap");
+  var markupHintBtn = $("markupHintBtn");
+  var markupHintPopover = $("markupHintPopover");
+  var markupHintCloseBtn = $("markupHintCloseBtn");
   var markupColorInput = $("markupColorInput");
   var markupWidthInput = $("markupWidthInput");
   var markupWidthLabel = $("markupWidthLabel");
@@ -559,6 +587,8 @@
     // 0..1
     markups: /* @__PURE__ */ new Map(),
     // pageNum -> Stroke[]
+    selectedMarkupId: null,
+    // id of the stroke selected for deletion, on S.currentPage
     // Cloned copy of the loaded file's bytes, kept around because pdf.js can
     // detach/transfer the ArrayBuffer it's handed. Needed at export time to
     // load the original PDF into pdf-lib for burning in markups.
@@ -2093,6 +2123,14 @@
     pencilBtn.classList.toggle("active", active);
     overlayCanvas.classList.toggle("markup-active", active);
   }
+  function selectStroke(id) {
+    if (S.selectedMarkupId === id) return;
+    S.selectedMarkupId = id;
+    refreshOverlay();
+  }
+  function closeHintPopover() {
+    markupHintPopover.hidden = true;
+  }
   function updateMarkupButtons() {
     const strokes = S.markups.get(S.currentPage);
     const hasOnPage = !!(strokes && strokes.length);
@@ -2116,6 +2154,27 @@
     const scaleX = overlayCanvas.width / rect.width;
     const scaleY = overlayCanvas.height / rect.height;
     return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
+  }
+  function distToSegment(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq)) : 0;
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+  }
+  async function hitTestStroke(pt) {
+    const strokes = S.markups.get(S.currentPage);
+    if (!strokes || !strokes.length) return null;
+    const page = await getPageProxy(S.currentPage);
+    const viewport = page.getViewport({ scale: S.scale });
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const s = strokes[i];
+      const canvasPts = s.points.map(([x, y]) => applyMatrix(viewport.transform, x, y));
+      const tolerance = Math.max(6, s.width * S.scale / 2 + 4);
+      for (let j = 1; j < canvasPts.length; j++) {
+        if (distToSegment(pt, canvasPts[j - 1], canvasPts[j]) <= tolerance) return s;
+      }
+    }
+    return null;
   }
   function drawSegment(p0, p1) {
     overlayCtx.strokeStyle = S.markupColor;
@@ -2155,13 +2214,29 @@
   pencilBtn.addEventListener("click", () => {
     if (!S.pdfDoc) return;
     S.mode = S.mode === "markup" ? "view" : "markup";
-    if (S.mode !== "markup") cancelPolyline();
+    if (S.mode !== "markup") {
+      cancelPolyline();
+      selectStroke(null);
+    }
     syncMarkupModeUI();
   });
   markupToolSelect.addEventListener("change", () => {
     cancelPolyline();
+    selectStroke(null);
     S.markupTool = markupToolSelect.value;
-    markupHint.hidden = S.markupTool !== "polyline";
+    markupHintWrap.hidden = S.markupTool !== "polyline";
+    if (markupHintWrap.hidden) closeHintPopover();
+  });
+  markupHintBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    markupHintPopover.hidden = !markupHintPopover.hidden;
+  });
+  markupHintCloseBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeHintPopover();
+  });
+  document.addEventListener("click", (e) => {
+    if (!markupHintPopover.hidden && !markupHintWrap.contains(e.target)) closeHintPopover();
   });
   markupColorInput.addEventListener("input", () => {
     S.markupColor = markupColorInput.value;
@@ -2176,11 +2251,18 @@
   });
   var drawingActive = false;
   var currentPoints = [];
-  overlayCanvas.addEventListener("mousedown", (e) => {
+  overlayCanvas.addEventListener("mousedown", async (e) => {
     if (S.mode !== "markup" || !S.pdfDoc || S.markupTool === "polyline") return;
-    drawingActive = true;
-    currentPoints = [canvasPointFromEvent(e)];
     e.preventDefault();
+    const pt = canvasPointFromEvent(e);
+    const hit = await hitTestStroke(pt);
+    if (hit) {
+      selectStroke(hit.id);
+      return;
+    }
+    if (S.selectedMarkupId) selectStroke(null);
+    drawingActive = true;
+    currentPoints = [pt];
   });
   window.addEventListener("mousemove", async (e) => {
     if (!drawingActive) return;
@@ -2219,10 +2301,16 @@
     }
     await commitStroke("polyline", pts);
   }
-  overlayCanvas.addEventListener("click", (e) => {
+  overlayCanvas.addEventListener("click", async (e) => {
     if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline") return;
     const pt = canvasPointFromEvent(e);
     if (!polylineActive()) {
+      const hit = await hitTestStroke(pt);
+      if (hit) {
+        selectStroke(hit.id);
+        return;
+      }
+      if (S.selectedMarkupId) selectStroke(null);
       polylinePoints = [pt];
       return;
     }
@@ -2251,10 +2339,31 @@
     await refreshOverlay();
     drawPolyline([...polylinePoints, pt]);
   });
+  async function deleteSelectedStroke() {
+    const strokes = S.markups.get(S.currentPage);
+    const idx = strokes ? strokes.findIndex((s) => s.id === S.selectedMarkupId) : -1;
+    if (idx === -1) return;
+    strokes.splice(idx, 1);
+    S.selectedMarkupId = null;
+    await refreshOverlay();
+    updateMarkupButtons();
+  }
+  window.addEventListener("keydown", async (e) => {
+    if (S.mode !== "markup" || !S.selectedMarkupId) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      await deleteSelectedStroke();
+    } else if (e.key === "Escape") {
+      selectStroke(null);
+    }
+  });
   markupUndoBtn.addEventListener("click", async () => {
     const strokes = S.markups.get(S.currentPage);
     if (!strokes || !strokes.length) return;
-    strokes.pop();
+    const removed = strokes.pop();
+    if (S.selectedMarkupId === removed.id) S.selectedMarkupId = null;
     await refreshOverlay();
     updateMarkupButtons();
   });
@@ -2262,6 +2371,7 @@
     const strokes = S.markups.get(S.currentPage);
     if (!strokes || !strokes.length) return;
     S.markups.set(S.currentPage, []);
+    S.selectedMarkupId = null;
     await refreshOverlay();
     updateMarkupButtons();
   });
@@ -2281,7 +2391,9 @@
       S.currentRenderTask = null;
     }
     if (!S.pdfDoc) return;
-    S.currentPage = clamp(pageNum, 1, S.numPages);
+    const newPage = clamp(pageNum, 1, S.numPages);
+    if (newPage !== S.currentPage) S.selectedMarkupId = null;
+    S.currentPage = newPage;
     pageNumInput.value = S.currentPage;
     const page = await getPageProxy(S.currentPage);
     const viewport = page.getViewport({ scale: S.scale });
@@ -2430,6 +2542,19 @@
     for (const s of strokes) {
       if (s.points.length < 2) continue;
       const canvasPts = s.points.map(([x, y]) => applyMatrix(viewport.transform, x, y));
+      if (s.id === S.selectedMarkupId) {
+        overlayCtx.save();
+        overlayCtx.strokeStyle = "rgba(94,169,255,0.9)";
+        overlayCtx.lineWidth = Math.max(1, s.width * S.scale) + 6;
+        overlayCtx.lineJoin = "round";
+        overlayCtx.lineCap = "round";
+        overlayCtx.setLineDash([6, 4]);
+        overlayCtx.beginPath();
+        overlayCtx.moveTo(canvasPts[0][0], canvasPts[0][1]);
+        for (let i = 1; i < canvasPts.length; i++) overlayCtx.lineTo(canvasPts[i][0], canvasPts[i][1]);
+        overlayCtx.stroke();
+        overlayCtx.restore();
+      }
       overlayCtx.strokeStyle = s.color;
       overlayCtx.lineWidth = Math.max(1, s.width * S.scale);
       overlayCtx.globalAlpha = s.opacity == null ? 1 : s.opacity;
@@ -2669,6 +2794,7 @@
     S.mode = "view";
     S.rawFileBytes = null;
     S.fileName = "";
+    S.selectedMarkupId = null;
     cancelPolyline();
     syncMarkupModeUI();
     updateMarkupButtons();
