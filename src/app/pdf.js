@@ -122,6 +122,7 @@ function resetDocumentState() {
   S.lastResults = []; S.activeResultIndex = -1;
   S.processingCancelled = true; S.isBackgroundRunning = false;
   S.markups.clear(); S.mode = 'view'; S.rawFileBytes = null; S.fileName = '';
+  S.selectedMarkupId = null;
   cancelPolyline();
   syncMarkupModeUI();
   updateMarkupButtons();

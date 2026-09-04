@@ -248,18 +248,34 @@ if (process.env.SKIP_OCR) {
     () => document.querySelector('#procDetailText').textContent.includes('done, ready to search'),
     null, { timeout: 180000 });
 
-  // This page has a thin text layer AND was OCR'd, so both sources report it —
-  // which is the intended behaviour (pageHasImage / TEXT_LEN_THRESHOLD), and
-  // the OCR row is the one that proves the pixel path works end to end.
+  // This page has a thin text layer AND was OCR'd (pageHasImage /
+  // TEXT_LEN_THRESHOLD). Both sources genuinely do find the same six
+  // occurrences here — this fixture has no way to draw pixels without also
+  // drawing real PDF text at the same spot — so the results list is expected
+  // to show only the text-layer row per bubble; a same-position OCR "find"
+  // is a duplicate of that row, not a second occurrence, and gets merged
+  // away (see search.js's dedupeAcrossSources). What still needs proving end
+  // to end is that OCR itself isn't blind inside the circles — checked
+  // directly against its own extracted words, independent of the merge.
   const r = await search('PT-9042');
   check('OCR-read tag is found', r.length >= 1, JSON.stringify(r));
-  check('an OCR row is present, not only the text-layer row',
-    r.some(x => x.badges.includes('OCR')), JSON.stringify(r.map(x => x.badges)));
-  // The bug this fixture exists for: every bubble carries the tag, so every
-  // bubble must report it. One row means the circles ate the rest.
-  const ocrRows = r.filter(x => x.badges.includes('OCR'));
-  check('a tag inside an instrument bubble is read, and every occurrence is reported',
-    ocrRows.length >= 5, ocrRows.length + ' of 6 bubbles reported');
+  check('every bubble occurrence is reported once (not merged away, not duplicated)',
+    r.length === 6, JSON.stringify(r.map(x => x.badges)));
+  // The bug this fixture exists for: every bubble carries the tag, so OCR
+  // must read it out of all six, not just the one occurrence (if any) that
+  // isn't circled. Checked against OCR's own raw word data — the merged
+  // results list intentionally hides a same-position OCR find once the
+  // text-layer already reports it, so it can't be used to observe this.
+  const ocrTagHits = await page.evaluate(() => {
+    const data = window.__pdfreedyState.pageData.get(1);
+    let count = 0;
+    for (const line of (data && data.ocrLines) || []) {
+      for (const w of line.words) if (/9042/.test(w.text)) count++;
+    }
+    return count;
+  });
+  check('OCR itself reads the tag inside every bubble, not just the ones a text-layer hit already covers',
+    ocrTagHits >= 5, ocrTagHits + ' of 6 bubbles read by OCR');
 
   // ---- asking for rotated text after the fact ---------------------------
   // Ticking the box mid-document has to put the page back to work rather than

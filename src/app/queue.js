@@ -138,7 +138,7 @@ async function processPage(pageNum, epoch) {
   // if there's an active query, incrementally search this page and merge results
   if (S.currentQuery.norm) {
     const fresh = searchPage(pageNum, S.currentQuery);
-    mergeFreshResults(pageNum, fresh);
+    await mergeFreshResults(pageNum, fresh);
   }
 }
 

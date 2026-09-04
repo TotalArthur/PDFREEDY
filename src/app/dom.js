@@ -34,7 +34,10 @@ const fitWidthBtn = $('fitWidthBtn');
 const zoomResetBtn = $('zoomResetBtn');
 const pencilBtn = $('pencilBtn');
 const markupToolSelect = $('markupToolSelect');
-const markupHint = $('markupHint');
+const markupHintWrap = $('markupHintWrap');
+const markupHintBtn = $('markupHintBtn');
+const markupHintPopover = $('markupHintPopover');
+const markupHintCloseBtn = $('markupHintCloseBtn');
 const markupColorInput = $('markupColorInput');
 const markupWidthInput = $('markupWidthInput');
 const markupWidthLabel = $('markupWidthLabel');
@@ -88,7 +91,10 @@ export {
   zoomResetBtn,
   pencilBtn,
   markupToolSelect,
-  markupHint,
+  markupHintWrap,
+  markupHintBtn,
+  markupHintPopover,
+  markupHintCloseBtn,
   markupColorInput,
   markupWidthInput,
   markupWidthLabel,

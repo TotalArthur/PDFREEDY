@@ -34,11 +34,17 @@ const S = {
   markupWidth: 3,               // PDF-space points (not canvas pixels)
   markupOpacity: 1,             // 0..1
   markups: new Map(),          // pageNum -> Stroke[]
+  selectedMarkupId: null,       // id of the stroke selected for deletion, on S.currentPage
   // Cloned copy of the loaded file's bytes, kept around because pdf.js can
   // detach/transfer the ArrayBuffer it's handed. Needed at export time to
   // load the original PDF into pdf-lib for burning in markups.
   rawFileBytes: null,
   fileName: '',
 };
+
+// Test-only observability hook (see tests/e2e.test.mjs, tests/e2e-markup.test.mjs):
+// lets a test inspect raw per-source extraction (e.g. OCR word data) directly,
+// independent of what the deduped/merged results list ends up showing.
+if (typeof window !== 'undefined') window.__pdfreedyState = S;
 
 export { S };
