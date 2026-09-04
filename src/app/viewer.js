@@ -4,7 +4,7 @@ import { itemQuadCanvas, boundsOfPoints, applyMatrix } from '../lib/geometry.js'
 import { getPageProxy } from './pdf.js';
 import { updateProcSummary } from './queue.js';
 import { renderResultsList } from './results.js';
-import { updateMarkupButtons } from './markup.js';
+import { updateMarkupButtons, canvasPointFromEvent, hitTestStroke, selectStroke } from './markup.js';
 import {
   skipPageBtn,
   prevPageBtn,
@@ -390,9 +390,14 @@ canvasScroll.addEventListener('wheel', (e) => {
 
 // ---- drag to pan ----
 let dragging = false, dragStartX=0, dragStartY=0, dragScrollX=0, dragScrollY=0;
-canvasScroll.addEventListener('mousedown', (e) => {
+canvasScroll.addEventListener('mousedown', async (e) => {
   if (e.target.closest('.result-item')) return;
   if (S.mode === 'markup') return; // let markup.js's drawing handlers own the gesture
+  // Selecting a drawn line (to delete it) only happens outside pencil mode,
+  // so a click that lands on one selects it instead of starting a pan.
+  const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
+  if (hit) { selectStroke(hit.id); return; }
+  if (S.selectedMarkupId) selectStroke(null);
   dragging = true;
   dragStartX = e.clientX; dragStartY = e.clientY;
   dragScrollX = canvasScroll.scrollLeft; dragScrollY = canvasScroll.scrollTop;

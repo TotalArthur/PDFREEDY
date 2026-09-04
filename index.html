@@ -2215,10 +2215,8 @@
   pencilBtn.addEventListener("click", () => {
     if (!S.pdfDoc) return;
     S.mode = S.mode === "markup" ? "view" : "markup";
-    if (S.mode !== "markup") {
-      cancelPolyline();
-      selectStroke(null);
-    }
+    if (S.mode === "markup") selectStroke(null);
+    else cancelPolyline();
     syncMarkupModeUI();
   });
   markupToolSelect.addEventListener("change", () => {
@@ -2252,18 +2250,11 @@
   });
   var drawingActive = false;
   var currentPoints = [];
-  overlayCanvas.addEventListener("mousedown", async (e) => {
+  overlayCanvas.addEventListener("mousedown", (e) => {
     if (S.mode !== "markup" || !S.pdfDoc || S.markupTool === "polyline") return;
     e.preventDefault();
-    const pt = canvasPointFromEvent(e);
-    const hit = await hitTestStroke(pt);
-    if (hit) {
-      selectStroke(hit.id);
-      return;
-    }
-    if (S.selectedMarkupId) selectStroke(null);
     drawingActive = true;
-    currentPoints = [pt];
+    currentPoints = [canvasPointFromEvent(e)];
   });
   window.addEventListener("mousemove", async (e) => {
     if (!drawingActive) return;
@@ -2302,16 +2293,10 @@
     }
     await commitStroke("polyline", pts);
   }
-  overlayCanvas.addEventListener("click", async (e) => {
+  overlayCanvas.addEventListener("click", (e) => {
     if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline") return;
     const pt = canvasPointFromEvent(e);
     if (!polylineActive()) {
-      const hit = await hitTestStroke(pt);
-      if (hit) {
-        selectStroke(hit.id);
-        return;
-      }
-      if (S.selectedMarkupId) selectStroke(null);
       polylinePoints = [pt];
       return;
     }
@@ -2350,7 +2335,7 @@
     updateMarkupButtons();
   }
   window.addEventListener("keydown", async (e) => {
-    if (S.mode !== "markup" || !S.selectedMarkupId) return;
+    if (S.mode === "markup" || !S.selectedMarkupId) return;
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.key === "Delete" || e.key === "Backspace") {
@@ -2678,9 +2663,15 @@
   var dragStartY = 0;
   var dragScrollX = 0;
   var dragScrollY = 0;
-  canvasScroll.addEventListener("mousedown", (e) => {
+  canvasScroll.addEventListener("mousedown", async (e) => {
     if (e.target.closest(".result-item")) return;
     if (S.mode === "markup") return;
+    const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
+    if (hit) {
+      selectStroke(hit.id);
+      return;
+    }
+    if (S.selectedMarkupId) selectStroke(null);
     dragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
