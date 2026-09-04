@@ -32,6 +32,14 @@ const zoomInBtn = $('zoomInBtn');
 const zoomLabel = $('zoomLabel');
 const fitWidthBtn = $('fitWidthBtn');
 const zoomResetBtn = $('zoomResetBtn');
+const pencilBtn = $('pencilBtn');
+const markupToolSelect = $('markupToolSelect');
+const markupColorInput = $('markupColorInput');
+const markupWidthInput = $('markupWidthInput');
+const markupWidthLabel = $('markupWidthLabel');
+const markupUndoBtn = $('markupUndoBtn');
+const markupClearBtn = $('markupClearBtn');
+const markupExportBtn = $('markupExportBtn');
 const canvasScroll = $('canvasScroll');
 const canvasStage = $('canvasStage');
 const pageCanvas = $('pageCanvas');
@@ -75,6 +83,14 @@ export {
   zoomLabel,
   fitWidthBtn,
   zoomResetBtn,
+  pencilBtn,
+  markupToolSelect,
+  markupColorInput,
+  markupWidthInput,
+  markupWidthLabel,
+  markupUndoBtn,
+  markupClearBtn,
+  markupExportBtn,
   canvasScroll,
   canvasStage,
   pageCanvas,

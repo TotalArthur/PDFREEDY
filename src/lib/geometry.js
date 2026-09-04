@@ -29,6 +29,14 @@ function itemQuadCanvas(item, viewport) {
   return itemQuadPdfSpace(item).map(([x,y]) => applyMatrix(viewport.transform, x, y));
 }
 
+// Inverse of applyMatrix(viewport.transform, ...): canvas pixels -> PDF-space
+// page units. Used to store pencil strokes independent of zoom, so they can
+// be re-projected through whatever viewport is current at render time (see
+// applyMatrix/itemQuadCanvas above) and reused as-is by pdf-lib at export.
+function pdfPointFromCanvas(viewport, x, y) {
+  return viewport.convertToPdfPoint(x, y);
+}
+
 function boundsOfPoints(pts) {
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
   for (const [x,y] of pts) {
@@ -66,4 +74,4 @@ function mapBoxBack(bbox, degrees, W, H) {
 }
 
 export { applyMatrix, itemQuadPdfSpace, itemQuadCanvas, boundsOfPoints,
-         inverseRotatePoint, readingAxis, mapBoxBack };
+         inverseRotatePoint, readingAxis, mapBoxBack, pdfPointFromCanvas };

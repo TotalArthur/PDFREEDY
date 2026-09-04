@@ -30,6 +30,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 
 <style>
   :root {
@@ -273,6 +274,17 @@
   #pageCountLabel { color: var(--text-dim); font-size: 13px; }
   .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
   #zoomLabel { font-size: 12px; color: var(--text-dim); width: 46px; text-align: center; }
+  #pencilBtn.active { background: var(--accent); color: #08131f; border-color: var(--accent); }
+  #markupColorInput {
+    width: 28px; height: 28px; padding: 0; border-radius: 5px; border: 1px solid var(--border);
+    background: var(--panel-2); cursor: pointer;
+  }
+  #markupWidthInput { width: 70px; vertical-align: middle; }
+  #markupWidthLabel { font-size: 12px; color: var(--text-dim); width: 30px; text-align: center; display: inline-block; }
+  #markupToolSelect {
+    padding: 5px 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--text); font-size: 13px;
+  }
   .page-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }
   .page-badge.text { background: #274a2e; color: var(--good); }
   .page-badge.ocr { background: #4a3d1c; color: var(--warn); }
@@ -292,6 +304,7 @@
   }
   #pageCanvas { display: block; }
   #overlayCanvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+  #overlayCanvas.markup-active { pointer-events: auto; cursor: crosshair; }
   #emptyViewer {
     flex: 1; display: flex; align-items: center; justify-content: center;
     color: var(--text-dim); font-size: 14px; text-align: center; padding: 40px;
@@ -394,6 +407,18 @@
         <button id="zoomInBtn">&plus;</button>
         <button id="fitWidthBtn">Fit width</button>
         <button id="zoomResetBtn">100%</button>
+        <div class="toolbar-sep"></div>
+        <button id="pencilBtn" title="Draw markup on the drawing">&#9998; Pencil</button>
+        <select id="markupToolSelect" title="Markup shape">
+          <option value="pen">Freehand</option>
+          <option value="line">Straight line</option>
+        </select>
+        <input type="color" id="markupColorInput" value="#ff3b30" title="Markup color">
+        <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
+        <span id="markupWidthLabel">3px</span>
+        <button id="markupUndoBtn" title="Undo last stroke on this page" disabled>Undo</button>
+        <button id="markupClearBtn" title="Clear all markups on this page" disabled>Clear page</button>
+        <button id="markupExportBtn" title="Export a PDF with markups burned in" disabled>Export PDF</button>
       </div>
       <div id="canvasScroll">
         <div id="emptyViewer">
@@ -464,6 +489,14 @@
   var zoomLabel = $("zoomLabel");
   var fitWidthBtn = $("fitWidthBtn");
   var zoomResetBtn = $("zoomResetBtn");
+  var pencilBtn = $("pencilBtn");
+  var markupToolSelect = $("markupToolSelect");
+  var markupColorInput = $("markupColorInput");
+  var markupWidthInput = $("markupWidthInput");
+  var markupWidthLabel = $("markupWidthLabel");
+  var markupUndoBtn = $("markupUndoBtn");
+  var markupClearBtn = $("markupClearBtn");
+  var markupExportBtn = $("markupExportBtn");
   var canvasScroll = $("canvasScroll");
   var canvasStage = $("canvasStage");
   var pageCanvas = $("pageCanvas");
@@ -503,7 +536,22 @@
     // Set when a search found nothing on the cheap pass and only turned results
     // up once the matcher was allowed to absorb dropped characters. Those hits
     // are worth surfacing but not worth presenting as certainties.
-    deepSearchUsed: false
+    deepSearchUsed: false,
+    // Pencil markup tool.
+    mode: "view",
+    // 'view' | 'markup'
+    markupTool: "pen",
+    // 'pen' | 'line'
+    markupColor: "#ff3b30",
+    markupWidth: 3,
+    // PDF-space points (not canvas pixels)
+    markups: /* @__PURE__ */ new Map(),
+    // pageNum -> Stroke[]
+    // Cloned copy of the loaded file's bytes, kept around because pdf.js can
+    // detach/transfer the ArrayBuffer it's handed. Needed at export time to
+    // load the original PDF into pdf-lib for burning in markups.
+    rawFileBytes: null,
+    fileName: ""
   };
 
   // src/lib/text.js
@@ -1152,6 +1200,9 @@
   }
   function itemQuadCanvas(item, viewport) {
     return itemQuadPdfSpace(item).map(([x, y]) => applyMatrix(viewport.transform, x, y));
+  }
+  function pdfPointFromCanvas(viewport, x, y) {
+    return viewport.convertToPdfPoint(x, y);
   }
   function boundsOfPoints(pts) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -2023,6 +2074,118 @@
     ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh);
   }
 
+  // src/app/markup.js
+  function syncMarkupModeUI() {
+    const active = S.mode === "markup";
+    pencilBtn.classList.toggle("active", active);
+    overlayCanvas.classList.toggle("markup-active", active);
+  }
+  function updateMarkupButtons() {
+    const strokes = S.markups.get(S.currentPage);
+    const hasOnPage = !!(strokes && strokes.length);
+    markupUndoBtn.disabled = !hasOnPage;
+    markupClearBtn.disabled = !hasOnPage;
+    let anyMarkups = false;
+    for (const arr of S.markups.values()) {
+      if (arr.length) {
+        anyMarkups = true;
+        break;
+      }
+    }
+    markupExportBtn.disabled = !anyMarkups;
+  }
+  async function refreshOverlay() {
+    await drawHighlights();
+    await drawMarkups();
+  }
+  function canvasPointFromEvent(e) {
+    const rect = overlayCanvas.getBoundingClientRect();
+    const scaleX = overlayCanvas.width / rect.width;
+    const scaleY = overlayCanvas.height / rect.height;
+    return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
+  }
+  function drawSegment(p0, p1) {
+    overlayCtx.strokeStyle = S.markupColor;
+    overlayCtx.lineWidth = Math.max(1, S.markupWidth * S.scale);
+    overlayCtx.lineJoin = "round";
+    overlayCtx.lineCap = "round";
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(p0[0], p0[1]);
+    overlayCtx.lineTo(p1[0], p1[1]);
+    overlayCtx.stroke();
+  }
+  pencilBtn.addEventListener("click", () => {
+    if (!S.pdfDoc) return;
+    S.mode = S.mode === "markup" ? "view" : "markup";
+    syncMarkupModeUI();
+  });
+  markupToolSelect.addEventListener("change", () => {
+    S.markupTool = markupToolSelect.value;
+  });
+  markupColorInput.addEventListener("input", () => {
+    S.markupColor = markupColorInput.value;
+  });
+  markupWidthInput.addEventListener("input", () => {
+    S.markupWidth = parseInt(markupWidthInput.value, 10) || 1;
+    markupWidthLabel.textContent = S.markupWidth + "px";
+  });
+  var drawingActive = false;
+  var currentPoints = [];
+  overlayCanvas.addEventListener("mousedown", (e) => {
+    if (S.mode !== "markup" || !S.pdfDoc) return;
+    drawingActive = true;
+    currentPoints = [canvasPointFromEvent(e)];
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", async (e) => {
+    if (!drawingActive) return;
+    const pt = canvasPointFromEvent(e);
+    if (S.markupTool === "line") {
+      currentPoints = [currentPoints[0], pt];
+      await refreshOverlay();
+      drawSegment(currentPoints[0], currentPoints[1]);
+    } else {
+      currentPoints.push(pt);
+      drawSegment(currentPoints[currentPoints.length - 2], pt);
+    }
+  });
+  window.addEventListener("mouseup", async () => {
+    if (!drawingActive) return;
+    drawingActive = false;
+    const pts = currentPoints;
+    currentPoints = [];
+    if (pts.length < 2) return;
+    const page = await getPageProxy(S.currentPage);
+    const viewport = page.getViewport({ scale: S.scale });
+    const pdfPoints = pts.map(([x, y]) => pdfPointFromCanvas(viewport, x, y));
+    const stroke = {
+      id: "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      tool: S.markupTool,
+      color: S.markupColor,
+      width: S.markupWidth,
+      points: pdfPoints,
+      createdAt: Date.now()
+    };
+    if (!S.markups.has(S.currentPage)) S.markups.set(S.currentPage, []);
+    S.markups.get(S.currentPage).push(stroke);
+    await refreshOverlay();
+    updateMarkupButtons();
+  });
+  markupUndoBtn.addEventListener("click", async () => {
+    const strokes = S.markups.get(S.currentPage);
+    if (!strokes || !strokes.length) return;
+    strokes.pop();
+    await refreshOverlay();
+    updateMarkupButtons();
+  });
+  markupClearBtn.addEventListener("click", async () => {
+    const strokes = S.markups.get(S.currentPage);
+    if (!strokes || !strokes.length) return;
+    S.markups.set(S.currentPage, []);
+    await refreshOverlay();
+    updateMarkupButtons();
+  });
+
   // src/app/viewer.js
   async function renderPage(pageNum) {
     if (S.currentRenderTask) {
@@ -2060,6 +2223,8 @@
     updatePageBadge();
     updateProcSummary();
     await drawHighlights();
+    await drawMarkups();
+    updateMarkupButtons();
     const d = S.pageData.get(S.currentPage);
     skipPageBtn.disabled = !(d && d.status === "ocr-running");
   }
@@ -2083,8 +2248,11 @@
     currentPageBadge.classList.add(cls);
     currentPageBadge.textContent = label;
   }
-  async function drawHighlights(activeOnly) {
+  function clearOverlay() {
     overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  }
+  async function drawHighlights(activeOnly) {
+    clearOverlay();
     if (!S.lastResults.length) return;
     const page = await getPageProxy(S.currentPage);
     const viewport = page.getViewport({ scale: S.scale });
@@ -2115,6 +2283,24 @@
     overlayCtx.fill();
     overlayCtx.stroke();
   }
+  async function drawMarkups() {
+    const strokes = S.markups.get(S.currentPage);
+    if (!strokes || !strokes.length) return;
+    const page = await getPageProxy(S.currentPage);
+    const viewport = page.getViewport({ scale: S.scale });
+    for (const s of strokes) {
+      if (s.points.length < 2) continue;
+      const canvasPts = s.points.map(([x, y]) => applyMatrix(viewport.transform, x, y));
+      overlayCtx.strokeStyle = s.color;
+      overlayCtx.lineWidth = Math.max(1, s.width * S.scale);
+      overlayCtx.lineJoin = "round";
+      overlayCtx.lineCap = "round";
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(canvasPts[0][0], canvasPts[0][1]);
+      for (let i = 1; i < canvasPts.length; i++) overlayCtx.lineTo(canvasPts[i][0], canvasPts[i][1]);
+      overlayCtx.stroke();
+    }
+  }
   async function jumpToResult(i) {
     S.activeResultIndex = i;
     renderResultsList();
@@ -2127,6 +2313,7 @@
     }
     centerOnResult(res);
     await drawHighlights();
+    await drawMarkups();
   }
   async function centerOnResult(res) {
     const page = await getPageProxy(res.page);
@@ -2198,6 +2385,7 @@
   var dragScrollY = 0;
   canvasScroll.addEventListener("mousedown", (e) => {
     if (e.target.closest(".result-item")) return;
+    if (S.mode === "markup") return;
     dragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
@@ -2262,6 +2450,8 @@
     fileInfo.textContent = "Loading " + file.name + " \u2026";
     try {
       const arrayBuffer = await file.arrayBuffer();
+      S.rawFileBytes = arrayBuffer.slice(0);
+      S.fileName = file.name;
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
       S.pdfDoc = await loadingTask.promise;
       S.numPages = S.pdfDoc.numPages;
@@ -2306,6 +2496,12 @@
     S.activeResultIndex = -1;
     S.processingCancelled = true;
     S.isBackgroundRunning = false;
+    S.markups.clear();
+    S.mode = "view";
+    S.rawFileBytes = null;
+    S.fileName = "";
+    syncMarkupModeUI();
+    updateMarkupButtons();
     if (S.currentRenderTask) {
       try {
         S.currentRenderTask.cancel();
@@ -2546,6 +2742,67 @@
   fuzzyToggle.addEventListener("change", () => {
     if (S.currentQuery.norm) runFullSearch();
   });
+
+  // src/app/export.js
+  function hexToRgb01(hex) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+    if (!m) return { r: 0, g: 0, b: 0 };
+    return { r: parseInt(m[1], 16) / 255, g: parseInt(m[2], 16) / 255, b: parseInt(m[3], 16) / 255 };
+  }
+  function deriveExportFilename() {
+    const base = (S.fileName || "drawing.pdf").replace(/\.pdf$/i, "");
+    return base + "-markup.pdf";
+  }
+  function downloadBlob(bytes, filename) {
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+  async function exportMarkedUpPdf() {
+    if (!S.rawFileBytes) return;
+    const origLabel = markupExportBtn.textContent;
+    markupExportBtn.disabled = true;
+    markupExportBtn.textContent = "Exporting\u2026";
+    try {
+      const pdfDoc = await PDFLib.PDFDocument.load(S.rawFileBytes.slice(0));
+      const pages = pdfDoc.getPages();
+      for (const [pageNum, strokes] of S.markups) {
+        if (!strokes.length) continue;
+        const page = pages[pageNum - 1];
+        if (!page) continue;
+        for (const s of strokes) {
+          const { r, g, b } = hexToRgb01(s.color);
+          for (let i = 1; i < s.points.length; i++) {
+            const [x0, y0] = s.points[i - 1];
+            const [x1, y1] = s.points[i];
+            page.drawLine({
+              start: { x: x0, y: y0 },
+              end: { x: x1, y: y1 },
+              thickness: s.width,
+              color: PDFLib.rgb(r, g, b),
+              opacity: 1,
+              lineCap: PDFLib.LineCapStyle.Round
+            });
+          }
+        }
+      }
+      const bytes = await pdfDoc.save();
+      downloadBlob(bytes, deriveExportFilename());
+    } catch (err) {
+      console.error(err);
+      alert("Failed to export marked-up PDF: " + err.message);
+    } finally {
+      markupExportBtn.textContent = origLabel;
+      markupExportBtn.disabled = false;
+    }
+  }
+  markupExportBtn.addEventListener("click", exportMarkedUpPdf);
 
   // src/app/main.js
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";

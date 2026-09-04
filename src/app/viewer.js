@@ -1,9 +1,10 @@
 import { S } from './state.js';
 import { clamp } from '../lib/text.js';
-import { itemQuadCanvas, boundsOfPoints } from '../lib/geometry.js';
+import { itemQuadCanvas, boundsOfPoints, applyMatrix } from '../lib/geometry.js';
 import { getPageProxy } from './pdf.js';
 import { updateProcSummary } from './queue.js';
 import { renderResultsList } from './results.js';
+import { updateMarkupButtons } from './markup.js';
 import {
   skipPageBtn,
   prevPageBtn,
@@ -62,6 +63,8 @@ async function renderPage(pageNum) {
   updatePageBadge();
   updateProcSummary();
   await drawHighlights();
+  await drawMarkups();
+  updateMarkupButtons();
 
   const d = S.pageData.get(S.currentPage);
   skipPageBtn.disabled = !(d && d.status === 'ocr-running');
@@ -85,8 +88,16 @@ function updatePageBadge() {
   currentPageBadge.textContent = label;
 }
 
+function clearOverlay() {
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+}
+
+// drawHighlights() and drawMarkups() share the one overlay canvas, so only
+// the first of the two calls each render pass clears it — see renderPage()
+// and jumpToResult(), which always call drawHighlights() immediately before
+// drawMarkups().
 async function drawHighlights(activeOnly) {
-  overlayCtx.clearRect(0,0,overlayCanvas.width, overlayCanvas.height);
+  clearOverlay();
   if (!S.lastResults.length) return;
   const page = await getPageProxy(S.currentPage);
   const viewport = page.getViewport({ scale: S.scale });
@@ -121,6 +132,29 @@ function strokePoly(pts) {
   overlayCtx.stroke();
 }
 
+// Re-projects each stored (PDF-space, zoom-independent) stroke through the
+// current viewport transform, so pencil markups stay pinned to the drawing
+// across zoom/page changes — the same transform itemQuadCanvas() uses for
+// search-hit boxes.
+async function drawMarkups() {
+  const strokes = S.markups.get(S.currentPage);
+  if (!strokes || !strokes.length) return;
+  const page = await getPageProxy(S.currentPage);
+  const viewport = page.getViewport({ scale: S.scale });
+  for (const s of strokes) {
+    if (s.points.length < 2) continue;
+    const canvasPts = s.points.map(([x,y]) => applyMatrix(viewport.transform, x, y));
+    overlayCtx.strokeStyle = s.color;
+    overlayCtx.lineWidth = Math.max(1, s.width * S.scale);
+    overlayCtx.lineJoin = 'round';
+    overlayCtx.lineCap = 'round';
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(canvasPts[0][0], canvasPts[0][1]);
+    for (let i = 1; i < canvasPts.length; i++) overlayCtx.lineTo(canvasPts[i][0], canvasPts[i][1]);
+    overlayCtx.stroke();
+  }
+}
+
 async function jumpToResult(i) {
   S.activeResultIndex = i;
   renderResultsList();
@@ -133,6 +167,7 @@ async function jumpToResult(i) {
   }
   centerOnResult(res);
   await drawHighlights();
+  await drawMarkups();
 }
 
 async function centerOnResult(res) {
@@ -199,6 +234,7 @@ canvasScroll.addEventListener('wheel', async (e) => {
 let dragging = false, dragStartX=0, dragStartY=0, dragScrollX=0, dragScrollY=0;
 canvasScroll.addEventListener('mousedown', (e) => {
   if (e.target.closest('.result-item')) return;
+  if (S.mode === 'markup') return; // let markup.js's drawing handlers own the gesture
   dragging = true;
   dragStartX = e.clientX; dragStartY = e.clientY;
   dragScrollX = canvasScroll.scrollLeft; dragScrollY = canvasScroll.scrollTop;
@@ -213,8 +249,10 @@ window.addEventListener('mouseup', () => { dragging = false; canvasScroll.style.
 
 export {
   centerOnResult,
+  clearOverlay,
   dragging,
   drawHighlights,
+  drawMarkups,
   jumpToResult,
   renderPage,
   setZoom,
