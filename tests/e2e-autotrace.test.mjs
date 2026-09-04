@@ -158,6 +158,11 @@ await page.click('#searchBtn');
 const secondTraceBtn = page.locator('#resultsList .result-item .trace-btn').first();
 const secondBtnVisible = await secondTraceBtn.isVisible().catch(() => false);
 if (secondBtnVisible) {
+  // Reset to a known 'view' state first — mode is left at 'markup' after the
+  // previous trace's Undo (nothing resets it), so without this the very next
+  // waitForFunction below could resolve on stale leftover state rather than
+  // on this click's own effect.
+  await page.evaluate(() => { window.__pdfreedyState.mode = 'view'; });
   await secondTraceBtn.click();
   await page.waitForFunction(() => window.__pdfreedyState.mode === 'markup', null, { timeout: 20000 });
   await page.keyboard.press('Escape'); // a lone seeded point with no line found — just cancel cleanly
@@ -176,6 +181,7 @@ await thirdTraceBtn.waitFor({ state: 'visible', timeout: 20000 });
 check('the "Mark up" button appears even on a page that also has a raster image',
   await thirdTraceBtn.isVisible());
 
+await page.evaluate(() => { window.__pdfreedyState.mode = 'view'; }); // same reset as above
 await thirdTraceBtn.click();
 await page.waitForFunction(() => window.__pdfreedyState.mode === 'markup'
   && window.__pdfreedyState.markupTool === 'polyline', null, { timeout: 20000 });
