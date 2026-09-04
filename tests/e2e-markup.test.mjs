@@ -83,6 +83,42 @@ await page.waitForFunction(() => document.querySelector('#fileInfo').textContent
 await page.waitForFunction(() => document.querySelector('#procDetailText').textContent.includes('done, ready to search'), null, { timeout: 30000 });
 check('no script errors after load', errors.length === 0, errors.join(' | '));
 
+// ---- wheel-zoom coalescing: a burst of wheel ticks must not trigger one
+// full page re-render per tick (that synchronous cancel/clear/redraw cascade
+// was the source of the reported jitter) ----
+{
+  await page.evaluate(() => { window.__pdfreedyRenderCount = 0; });
+  const scaleBefore = await page.evaluate(() => parseFloat(document.querySelector('#zoomLabel').textContent));
+  const TICKS = 12;
+  // Playwright's page.mouse.wheel() round-trips through CDP per call, with
+  // enough latency that each tick's requestAnimationFrame fires before the
+  // next tick arrives — it never actually bursts, so it can't exercise the
+  // coalescing path. Dispatching real WheelEvents synchronously in one JS
+  // turn reproduces what a fast trackpad/wheel gesture actually looks like
+  // to the page: many 'wheel' events arriving before the browser gets a
+  // chance to run a single requestAnimationFrame callback.
+  await page.evaluate((n) => {
+    const el = document.querySelector('#canvasScroll');
+    const rect = el.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2, clientY = rect.top + rect.height / 2;
+    for (let i = 0; i < n; i++) {
+      el.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: -80, clientX, clientY, bubbles: true, cancelable: true,
+      }));
+    }
+  }, TICKS);
+  await page.waitForTimeout(400); // let any pending rAF-scheduled render settle
+  const renderCount = await page.evaluate(() => window.__pdfreedyRenderCount);
+  const scaleAfter = await page.evaluate(() => parseFloat(document.querySelector('#zoomLabel').textContent));
+  check(`a burst of ${TICKS} wheel ticks triggers far fewer than ${TICKS} real renders`,
+    renderCount > 0 && renderCount < TICKS / 2, `renders=${renderCount}`);
+  check('the burst still applied every tick\'s zoom (final scale reflects all of them, not just one)',
+    scaleAfter > scaleBefore, `before=${scaleBefore} after=${scaleAfter}`);
+  // Reset zoom for the rest of the test, which assumes the 100% baseline.
+  await page.click('#zoomResetBtn');
+  await page.waitForTimeout(200);
+}
+
 // ---- enter markup mode and draw a straight line ----
 check('export button starts disabled (no markups yet)', await page.isDisabled('#markupExportBtn'));
 await page.click('#pencilBtn');
@@ -138,6 +174,86 @@ await page.fill('#pageNumInput', '1');
 await page.press('#pageNumInput', 'Enter');
 await page.waitForTimeout(300);
 check('back on page 1, stroke reappears', await overlayHasInk());
+
+async function alphaAt(cx, cy) {
+  return page.evaluate(({ cx, cy }) => {
+    const c = document.querySelector('#overlayCanvas');
+    const ctx = c.getContext('2d');
+    const x = Math.max(0, Math.floor(cx - 1)), y = Math.max(0, Math.floor(cy - 1));
+    const d = ctx.getImageData(x, y, 3, 3).data;
+    let maxAlpha = 0;
+    for (let i = 3; i < d.length; i += 4) maxAlpha = Math.max(maxAlpha, d[i]);
+    return maxAlpha;
+  }, { cx, cy });
+}
+
+// Re-fetch the canvas box: it may have shifted since zoom/page-nav resized it.
+const freshBox = await page.locator('#overlayCanvas').boundingBox();
+
+// ---- opacity: a low-opacity stroke should read visibly lighter than a
+// full-opacity one, both drawn fresh at known locations ----
+{
+  const lx0 = freshBox.x + 100, lx1 = freshBox.x + 300;
+  const fullY = freshBox.y + 300, lowY = freshBox.y + 350;
+
+  await page.mouse.move(lx0, fullY);
+  await page.mouse.down();
+  await page.mouse.move(lx1, fullY);
+  await page.mouse.up();
+
+  await page.evaluate(() => {
+    document.querySelector('#markupOpacityInput').value = '30';
+    document.querySelector('#markupOpacityInput').dispatchEvent(new Event('input'));
+  });
+  check('opacity label updates to match the slider', (await page.textContent('#markupOpacityLabel')) === '30%');
+
+  await page.mouse.move(lx0, lowY);
+  await page.mouse.down();
+  await page.mouse.move(lx1, lowY);
+  await page.mouse.up();
+
+  const fullAlpha = await alphaAt((lx0 + lx1) / 2 - freshBox.x, fullY - freshBox.y);
+  const lowAlpha = await alphaAt((lx0 + lx1) / 2 - freshBox.x, lowY - freshBox.y);
+  check('a 30%-opacity stroke reads visibly lighter than a full-opacity one',
+    lowAlpha > 0 && lowAlpha < fullAlpha, `full=${fullAlpha} low=${lowAlpha}`);
+
+  // Back to full opacity for the rest of the test.
+  await page.evaluate(() => {
+    document.querySelector('#markupOpacityInput').value = '100';
+    document.querySelector('#markupOpacityInput').dispatchEvent(new Event('input'));
+  });
+}
+
+// ---- point-to-point tool: click three points, Enter to finish ----
+{
+  check('markup hint is hidden for the drag tools', await page.isHidden('#markupHint'));
+  await page.selectOption('#markupToolSelect', 'polyline');
+  check('markup hint appears once the point-to-point tool is selected', await page.isVisible('#markupHint'));
+
+  const pA = { x: freshBox.x + 120, y: freshBox.y + 420 };
+  const pB = { x: freshBox.x + 260, y: freshBox.y + 420 };
+  const pC = { x: freshBox.x + 260, y: freshBox.y + 480 };
+  await page.mouse.click(pA.x, pA.y);
+  await page.mouse.click(pB.x, pB.y);
+  await page.mouse.click(pC.x, pC.y);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(150);
+
+  const midAB = await alphaAt((pA.x + pB.x) / 2 - freshBox.x, pA.y - freshBox.y);
+  const midBC = await alphaAt(pB.x - freshBox.x, (pB.y + pC.y) / 2 - freshBox.y);
+  check('point-to-point tool paints the first (A-B) segment', midAB > 0, String(midAB));
+  check('point-to-point tool paints the second (B-C) segment, proving all 3 clicks were used',
+    midBC > 0, String(midBC));
+
+  // ---- Escape cancels an in-progress polyline without committing anything ----
+  const cancelPt = { x: freshBox.x + 420, y: freshBox.y + 420 };
+  await page.mouse.click(cancelPt.x, cancelPt.y);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  const alphaAfterCancel = await alphaAt(cancelPt.x - freshBox.x, cancelPt.y - freshBox.y);
+  check('Escape cancels an in-progress point-to-point line without painting anything',
+    alphaAfterCancel === 0, String(alphaAfterCancel));
+}
 
 // ---- exit markup mode, confirm panning works again ----
 await page.click('#pencilBtn');

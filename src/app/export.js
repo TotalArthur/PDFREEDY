@@ -56,7 +56,7 @@ async function exportMarkedUpPdf() {
             end: { x: x1, y: y1 },
             thickness: s.width,
             color: PDFLib.rgb(r, g, b),
-            opacity: 1,
+            opacity: s.opacity == null ? 1 : s.opacity,
             lineCap: PDFLib.LineCapStyle.Round,
           });
         }

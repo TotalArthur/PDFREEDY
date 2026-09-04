@@ -281,10 +281,13 @@
   }
   #markupWidthInput { width: 70px; vertical-align: middle; }
   #markupWidthLabel { font-size: 12px; color: var(--text-dim); width: 30px; text-align: center; display: inline-block; }
+  #markupOpacityInput { width: 70px; vertical-align: middle; }
+  #markupOpacityLabel { font-size: 12px; color: var(--text-dim); width: 34px; text-align: center; display: inline-block; }
   #markupToolSelect {
     padding: 5px 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2);
     color: var(--text); font-size: 13px;
   }
+  #markupHint { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
   .page-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }
   .page-badge.text { background: #274a2e; color: var(--good); }
   .page-badge.ocr { background: #4a3d1c; color: var(--warn); }
@@ -412,10 +415,14 @@
         <select id="markupToolSelect" title="Markup shape">
           <option value="pen">Freehand</option>
           <option value="line">Straight line</option>
+          <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
         </select>
+        <span id="markupHint" hidden>Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel</span>
         <input type="color" id="markupColorInput" value="#ff3b30" title="Markup color">
         <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
         <span id="markupWidthLabel">3px</span>
+        <input type="range" id="markupOpacityInput" min="10" max="100" step="5" value="100" title="Markup opacity">
+        <span id="markupOpacityLabel">100%</span>
         <button id="markupUndoBtn" title="Undo last stroke on this page" disabled>Undo</button>
         <button id="markupClearBtn" title="Clear all markups on this page" disabled>Clear page</button>
         <button id="markupExportBtn" title="Export a PDF with markups burned in" disabled>Export PDF</button>

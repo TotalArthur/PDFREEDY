@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { renderPage } from './viewer.js';
 import { updateProcSummary, startBackgroundProcessing, hideViewerLoading } from './queue.js';
-import { syncMarkupModeUI, updateMarkupButtons } from './markup.js';
+import { syncMarkupModeUI, updateMarkupButtons, cancelPolyline } from './markup.js';
 import {
   fileInput,
   fileInfo,
@@ -122,6 +122,7 @@ function resetDocumentState() {
   S.lastResults = []; S.activeResultIndex = -1;
   S.processingCancelled = true; S.isBackgroundRunning = false;
   S.markups.clear(); S.mode = 'view'; S.rawFileBytes = null; S.fileName = '';
+  cancelPolyline();
   syncMarkupModeUI();
   updateMarkupButtons();
   if (S.currentRenderTask) {

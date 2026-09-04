@@ -34,9 +34,12 @@ const fitWidthBtn = $('fitWidthBtn');
 const zoomResetBtn = $('zoomResetBtn');
 const pencilBtn = $('pencilBtn');
 const markupToolSelect = $('markupToolSelect');
+const markupHint = $('markupHint');
 const markupColorInput = $('markupColorInput');
 const markupWidthInput = $('markupWidthInput');
 const markupWidthLabel = $('markupWidthLabel');
+const markupOpacityInput = $('markupOpacityInput');
+const markupOpacityLabel = $('markupOpacityLabel');
 const markupUndoBtn = $('markupUndoBtn');
 const markupClearBtn = $('markupClearBtn');
 const markupExportBtn = $('markupExportBtn');
@@ -85,9 +88,12 @@ export {
   zoomResetBtn,
   pencilBtn,
   markupToolSelect,
+  markupHint,
   markupColorInput,
   markupWidthInput,
   markupWidthLabel,
+  markupOpacityInput,
+  markupOpacityLabel,
   markupUndoBtn,
   markupClearBtn,
   markupExportBtn,
