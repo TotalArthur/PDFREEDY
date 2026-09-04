@@ -3,7 +3,9 @@ import { getPageProxy } from './pdf.js';
 import { jumpToResult } from './viewer.js';
 import { seedPolyline } from './markup.js';
 import { itemQuadPdfSpace, boundsOfPoints, applyMatrix } from '../lib/geometry.js';
-import { extractVectorSegments, buildLineGraph, anchorPointForTag, traceFromAnchor } from '../lib/vectorlines.js';
+import {
+  extractVectorSegments, excludeTextGlyphSegments, buildLineGraph, anchorPointForTag, traceFromAnchor,
+} from '../lib/vectorlines.js';
 
 // =======================================================================
 // "Mark up" button on a search result: auto-trace the pipe/line associated
@@ -23,7 +25,16 @@ async function getPageLineGraph(pageNum) {
   if (!data.vectorGraph) {
     const page = await getPageProxy(pageNum);
     const { segments, filledShapes } = await extractVectorSegments(page);
-    data.vectorGraph = buildLineGraph(segments, filledShapes);
+    // Some CAD exports draw every character twice: once as real (searchable)
+    // text, and again as vector stroke artwork tracing the glyph outlines,
+    // so the page renders correctly without depending on font embedding.
+    // Those strokes are indistinguishable from real line segments to the
+    // extractor and, sitting right next to every label, would otherwise win
+    // anchoring/traversal over the actual pipe — so anywhere a real text
+    // item already accounts for the ink, strip it before building the graph.
+    const textBoxes = (data.textItems || []).map(it => boundsOfPoints(itemQuadPdfSpace(it)));
+    const pipeSegments = excludeTextGlyphSegments(segments, textBoxes);
+    data.vectorGraph = buildLineGraph(pipeSegments, filledShapes);
   }
   return data.vectorGraph;
 }

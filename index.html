@@ -2297,6 +2297,34 @@
     const opList = await page.getOperatorList();
     return segmentsFromOperatorList(opList, pdfjsLib.OPS);
   }
+  var TEXT_MASK_PAD = 1;
+  function excludeTextGlyphSegments(segments, textBoxes) {
+    if (!textBoxes || !textBoxes.length) return segments;
+    const cellSize = 20;
+    const boxIndex = /* @__PURE__ */ new Map();
+    textBoxes.forEach((b, i) => {
+      const x0 = Math.floor(b.minX / cellSize), x1 = Math.floor(b.maxX / cellSize);
+      const y0 = Math.floor(b.minY / cellSize), y1 = Math.floor(b.maxY / cellSize);
+      for (let cx = x0; cx <= x1; cx++) {
+        for (let cy = y0; cy <= y1; cy++) {
+          const key = cx + "_" + cy;
+          if (!boxIndex.has(key)) boxIndex.set(key, []);
+          boxIndex.get(key).push(i);
+        }
+      }
+    });
+    function pointInsideAnyBox(x, y) {
+      const cx = Math.floor(x / cellSize), cy = Math.floor(y / cellSize);
+      const ids = boxIndex.get(cx + "_" + cy);
+      if (!ids) return false;
+      for (const id of ids) {
+        const b = textBoxes[id];
+        if (x >= b.minX - TEXT_MASK_PAD && x <= b.maxX + TEXT_MASK_PAD && y >= b.minY - TEXT_MASK_PAD && y <= b.maxY + TEXT_MASK_PAD) return true;
+      }
+      return false;
+    }
+    return segments.filter((s) => !(pointInsideAnyBox(s.x0, s.y0) && pointInsideAnyBox(s.x1, s.y1)));
+  }
   function buildLineGraph(segments, filledShapes = []) {
     const openSegments = segments.filter((s) => !s.closed);
     const nodes = [];
@@ -2343,7 +2371,7 @@
       const degB = (adjacency.get(e.b) || []).length;
       if (degA <= 1 && degB <= 1) keptIds.delete(e.id);
     }
-    const finalEdges = edges.filter((e) => keptIds.has(e.id));
+    const finalEdges = edges.filter((e) => keptIds.has(e.id)).map((e, i) => ({ ...e, id: i }));
     const finalAdjacency = /* @__PURE__ */ new Map();
     for (const e of finalEdges) {
       if (!finalAdjacency.has(e.a)) finalAdjacency.set(e.a, []);
@@ -2374,19 +2402,17 @@
     const w = tagBbox.maxX - tagBbox.minX;
     const h = tagBbox.maxY - tagBbox.minY;
     const radius = Math.max(w, h, 1) * ANCHOR_RADIUS_FACTOR;
-    const candidates = [];
+    const pool = [];
     for (const e of graph.edges) {
       const a = graph.nodes[e.a], b = graph.nodes[e.b];
+      if (angleOffPipeGrid(a.x, a.y, b.x, b.y) > ON_GRID_TOL) continue;
       const hit = pointToSegmentDistance(cx, cy, a.x, a.y, b.x, b.y);
       if (hit.dist > radius) continue;
       const below = hit.y > tagBbox.maxY ? 1 : 0;
-      const onGrid = angleOffPipeGrid(a.x, a.y, b.x, b.y) <= ON_GRID_TOL;
       const score = hit.dist - below * (h * 0.5);
-      candidates.push({ edge: e, point: [hit.x, hit.y], score, onGrid });
+      pool.push({ edge: e, point: [hit.x, hit.y], score });
     }
-    if (!candidates.length) return null;
-    const onGridCandidates = candidates.filter((c) => c.onGrid);
-    const pool = onGridCandidates.length ? onGridCandidates : candidates;
+    if (!pool.length) return null;
     let best = null, bestScore = Infinity;
     for (const c of pool) {
       if (c.score < bestScore) {
@@ -2432,6 +2458,8 @@
         const forward = (graph.adjacency.get(currentNode) || []).filter((id) => id !== prevEdge);
         if (forward.length !== 1) break;
         const nextEdge = graph.edges[forward[0]];
+        const na = graph.nodes[nextEdge.a], nb = graph.nodes[nextEdge.b];
+        if (angleOffPipeGrid(na.x, na.y, nb.x, nb.y) > ON_GRID_TOL) break;
         currentNode = nextEdge.a === currentNode ? nextEdge.b : nextEdge.a;
         prevEdge = forward[0];
       }
@@ -2449,7 +2477,9 @@
     if (!data.vectorGraph) {
       const page = await getPageProxy(pageNum);
       const { segments, filledShapes } = await extractVectorSegments(page);
-      data.vectorGraph = buildLineGraph(segments, filledShapes);
+      const textBoxes = (data.textItems || []).map((it) => boundsOfPoints(itemQuadPdfSpace(it)));
+      const pipeSegments = excludeTextGlyphSegments(segments, textBoxes);
+      data.vectorGraph = buildLineGraph(pipeSegments, filledShapes);
     }
     return data.vectorGraph;
   }
