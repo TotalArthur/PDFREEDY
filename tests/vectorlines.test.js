@@ -182,6 +182,38 @@ section('a short, fully isolated stub is dropped; a short segment chained into a
   check('a short segment chained into a longer run is kept', g2.edges.length === 2);
 }
 
+section('edge ids stay valid array indices after short-stub filtering drops earlier edges');
+{
+  // This is the actual bug behind a real-world failure: dropping the
+  // isolated stub (originally edge id 0) shifts every subsequent edge's
+  // position in the final array, but each edge kept its *original* id. If
+  // that id is used to index graph.edges directly (as traceFromAnchor and
+  // anchorPointForTag both do) without correcting for the shift, "edge 1"
+  // now resolves to whatever edge actually landed at array position 1 —
+  // not the edge that was really id 1 — and a walk can silently jump onto
+  // a completely unrelated, distant edge. On a real drawing this produced
+  // a wild diagonal trace running through unrelated geometry.
+  const segments = [
+    { x0: 1000, y0: 1000, x1: 1003, y1: 1000, strokeWidth: 1, dash: null, closed: false }, // dropped: isolated 3-unit stub, would-be id 0
+    { x0: 0, y0: 0, x1: 100, y1: 0, strokeWidth: 1, dash: null, closed: false },            // real pipe leg, would-be id 1
+    { x0: 100, y0: 0, x1: 100, y1: 100, strokeWidth: 1, dash: null, closed: false },        // real pipe leg, would-be id 2
+  ];
+  const graph = buildLineGraph(segments, []);
+  check('the isolated stub was in fact dropped (precondition for this test)', graph.edges.length === 2);
+  check('every edge\'s id matches its own actual position in graph.edges',
+    graph.edges.every((e, i) => e.id === i), JSON.stringify(graph.edges));
+
+  const tagBbox = { minX: 20, maxX: 40, minY: -20, maxY: -5 };
+  const anchor = anchorPointForTag(graph, tagBbox);
+  const traced = traceFromAnchor(graph, anchor);
+  check('the trace correctly follows the real corner, not a mis-indexed edge',
+    traced.some(([x, y]) => x === 0 && y === 0)
+    && traced.some(([x, y]) => x === 100 && y === 0)
+    && traced.some(([x, y]) => x === 100 && y === 100)
+    && !traced.some(([x, y]) => x === 1000 || x === 1003),
+    JSON.stringify(traced));
+}
+
 // ---------------------------------------------------------------------------
 section('Anchoring a tag bbox to its nearby line');
 {

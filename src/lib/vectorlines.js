@@ -175,6 +175,56 @@ async function extractVectorSegments(page) {
   return segmentsFromOperatorList(opList, pdfjsLib.OPS);
 }
 
+const TEXT_MASK_PAD = 1; // PDF-space units of slack around a text glyph's own box
+
+// Many CAD-exported P&IDs draw every character on the page twice: once as a
+// real (searchable) text object, and again as vector stroke artwork tracing
+// the glyph outlines, so the drawing renders identically without depending
+// on font embedding. Those glyph strokes look exactly like real line
+// segments to segmentsFromOperatorList() — dozens of tiny strokes per
+// character, chained together by ordinary endpoint-snapping into what looks
+// like a normal traceable run, and usually sitting far closer to a tag's own
+// label than the actual pipe is. Left in, they don't just add noise: they
+// actively win anchoring and traversal over the real line. This removes any
+// segment that sits entirely inside a known text glyph's box (both
+// endpoints, not just one — a real pipe that merely passes near or under a
+// label keeps at least one endpoint well outside a single glyph's small box,
+// so it survives). `textBoxes` are {minX,minY,maxX,maxY} in the same
+// PDF-space the segments are in — see itemQuadPdfSpace()/boundsOfPoints() in
+// lib/geometry.js for how a caller builds them from page text items.
+function excludeTextGlyphSegments(segments, textBoxes) {
+  if (!textBoxes || !textBoxes.length) return segments;
+
+  const cellSize = 20;
+  const boxIndex = new Map(); // "cx_cy" -> [boxIndex,...]
+  textBoxes.forEach((b, i) => {
+    const x0 = Math.floor(b.minX / cellSize), x1 = Math.floor(b.maxX / cellSize);
+    const y0 = Math.floor(b.minY / cellSize), y1 = Math.floor(b.maxY / cellSize);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const key = cx + '_' + cy;
+        if (!boxIndex.has(key)) boxIndex.set(key, []);
+        boxIndex.get(key).push(i);
+      }
+    }
+  });
+
+  function pointInsideAnyBox(x, y) {
+    const cx = Math.floor(x / cellSize), cy = Math.floor(y / cellSize);
+    const ids = boxIndex.get(cx + '_' + cy);
+    if (!ids) return false;
+    for (const id of ids) {
+      const b = textBoxes[id];
+      if (x >= b.minX - TEXT_MASK_PAD && x <= b.maxX + TEXT_MASK_PAD
+        && y >= b.minY - TEXT_MASK_PAD && y <= b.maxY + TEXT_MASK_PAD) return true;
+    }
+    return false;
+  }
+
+  return segments.filter(s =>
+    !(pointInsideAnyBox(s.x0, s.y0) && pointInsideAnyBox(s.x1, s.y1)));
+}
+
 // Turns raw segments into a connectivity graph: coincident endpoints are
 // snapped into shared nodes (this is what makes a bent pipe drawn as several
 // separate stroke ops into one connected run), short isolated stubs are
@@ -235,7 +285,16 @@ function buildLineGraph(segments, filledShapes = []) {
     const degB = (adjacency.get(e.b) || []).length;
     if (degA <= 1 && degB <= 1) keptIds.delete(e.id);
   }
-  const finalEdges = edges.filter(e => keptIds.has(e.id));
+  // Re-assigns .id to match each edge's position in the filtered array —
+  // traceFromAnchor/anchorPointForTag look edges up by graph.edges[id], so a
+  // stale id left over from the pre-filter array (which no longer matches
+  // its new position once earlier edges have been dropped) would silently
+  // resolve to a completely unrelated edge. That was a real bug here, not
+  // hypothetical: it's what actually produced the wild, unrelated-looking
+  // "diagonal jump" traces seen on real drawings — the walk was reading
+  // whatever edge happened to occupy the stale id's array slot, not the
+  // edge actually connected to the node it was standing on.
+  const finalEdges = edges.filter(e => keptIds.has(e.id)).map((e, i) => ({ ...e, id: i }));
 
   const finalAdjacency = new Map();
   for (const e of finalEdges) {
@@ -388,6 +447,7 @@ function traceFromAnchor(graph, anchor) {
 export {
   segmentsFromOperatorList,
   extractVectorSegments,
+  excludeTextGlyphSegments,
   buildLineGraph,
   anchorPointForTag,
   traceFromAnchor,
