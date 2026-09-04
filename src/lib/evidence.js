@@ -95,4 +95,20 @@ function reasonsFor(res, d) {
   return out;
 }
 
-export { scoreResult, reasonsFor, CONTEXT_SATURATION };
+// A single number for display: how sure the tool is this is genuinely the
+// tag, as a percentage. Kept separate from score() (which also weights
+// context/position/source for ranking, not just "how exact is this") so the
+// number shown can't drift out of sync with what reasonsFor() would say —
+// every discount here has a matching sentence there.
+function confidencePercent(res) {
+  const len = res.matchLen || 1;
+  const differing = (res.subs || 0) + (res.indels || 0);
+  let conf = Math.max(0, (len - differing) / len);
+  if (res.unknowns > 0 && typeof res.matchConf === 'number') conf = Math.min(conf, res.matchConf);
+  if (res.source === 'ocr' && typeof res.confidence === 'number') conf = Math.min(conf, res.confidence / 100);
+  if (res.confused) conf = Math.min(conf, 0.9);  // matched only via a glyph OCR can't reliably tell apart
+  if (res.fuzzy) conf = Math.min(conf, 0.75);    // found only by disregarding what OCR reported
+  return Math.round(Math.max(0, Math.min(1, conf)) * 100);
+}
+
+export { scoreResult, reasonsFor, confidencePercent, CONTEXT_SATURATION };

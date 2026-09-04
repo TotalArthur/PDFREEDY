@@ -194,15 +194,23 @@
   .badge-confused { background: #3d3218; color: #e8bf5a; }
   .badge-fixed { background: #123a3f; color: #4fd8e6; }
   .badge-page { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
+  .badge-conf { cursor: default; }
+  .badge-conf-high { background: #274a2e; color: var(--good); }
+  .badge-conf-med { background: #4a3d1c; color: var(--warn); }
+  .badge-conf-low { background: #4a2222; color: var(--bad); }
   .result-text { font-family: var(--mono); font-size: 13px; word-break: break-word; }
   .result-text mark { background: #5a4611; color: #ffd873; border-radius: 2px; padding: 0 1px; }
-  .result-conf { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; }
   .result-raw { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; font-family: var(--mono); }
   .fix-btn {
     background: none; border: 1px solid var(--border); color: var(--text-dim);
     border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
   }
   .fix-btn:hover { color: var(--text); border-color: var(--accent); }
+  .trace-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
+  }
+  .trace-btn:hover { color: var(--text); border-color: var(--accent); }
   .fix-row { display: flex; gap: 5px; margin-top: 5px; }
   .fix-row input {
     flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; padding: 4px 6px;
@@ -238,13 +246,6 @@
     content: '▸'; color: var(--text-dim); font-size: 12px;
   }
   .band-collapse[open] > summary .band-head::after { content: '▾'; }
-
-  .result-why {
-    margin: 5px 0 0; padding: 0 0 0 13px;
-    color: var(--text-dim); font-size: 11.5px; line-height: 1.45;
-  }
-  .result-why li { margin: 1px 0; }
-  .result-why li::marker { color: #4f6b8a; }
 
   .empty-note { color: var(--text-dim); font-size: 12.5px; padding: 10px 6px; line-height: 1.5; }
   #correctionsBar {
@@ -556,7 +557,7 @@
     pageProxyCache: /* @__PURE__ */ new Map(),
     // pageNum -> pdf.js page proxy promise
     pageData: /* @__PURE__ */ new Map(),
-    // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen }
+    // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen, hasImage, vectorGraph }
     lastResults: [],
     // current search result set
     activeResultIndex: -1,
@@ -706,6 +707,16 @@
     if (res.delimited && d.contextChars >= 3) out.push("It occupies a whole field, between separators.");
     if (res.fuzzy) out.push("Found only by disregarding what OCR reported \u2014 treat with suspicion.");
     return out;
+  }
+  function confidencePercent(res) {
+    const len = res.matchLen || 1;
+    const differing = (res.subs || 0) + (res.indels || 0);
+    let conf = Math.max(0, (len - differing) / len);
+    if (res.unknowns > 0 && typeof res.matchConf === "number") conf = Math.min(conf, res.matchConf);
+    if (res.source === "ocr" && typeof res.confidence === "number") conf = Math.min(conf, res.confidence / 100);
+    if (res.confused) conf = Math.min(conf, 0.9);
+    if (res.fuzzy) conf = Math.min(conf, 0.75);
+    return Math.round(Math.max(0, Math.min(1, conf)) * 100);
   }
 
   // src/lib/geometry.js
@@ -1896,228 +1907,6 @@
     return res.cost <= res.subs * T1_COST + 1e-9 ? "likely" : "possible";
   }
 
-  // src/app/results.js
-  function buildResultElement(res, i) {
-    const el = document.createElement("div");
-    el.className = "result-item" + (i === S.activeResultIndex ? " active" : "");
-    el.dataset.index = i;
-    const thumbWrap = document.createElement("div");
-    thumbWrap.className = "result-thumb";
-    const thumbCanvas = document.createElement("canvas");
-    thumbCanvas.width = 120;
-    thumbCanvas.height = 68;
-    thumbWrap.appendChild(thumbCanvas);
-    el.appendChild(thumbWrap);
-    buildThumbnail(res, thumbCanvas);
-    const meta = document.createElement("div");
-    meta.className = "result-meta";
-    const topRow = document.createElement("div");
-    topRow.className = "result-top-row";
-    topRow.innerHTML = '<span class="badge badge-page">Page ' + res.page + '</span><span class="badge ' + (res.source === "text" ? "badge-text" : "badge-ocr") + '">' + (res.source === "text" ? "TEXT" : "OCR") + "</span>" + (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) \u2014 check the crop">GLYPH</span>' : "") + (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : "") + (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : "");
-    if (res.source === "ocr") {
-      const fixBtn = document.createElement("button");
-      fixBtn.className = "fix-btn";
-      fixBtn.textContent = res.corrected ? "Edit fix" : "Fix text";
-      fixBtn.title = "Tell the tool what this actually says \u2014 it will remember and apply it everywhere";
-      fixBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        openFixEditor(el, meta, res);
-      });
-      topRow.appendChild(fixBtn);
-    }
-    meta.appendChild(topRow);
-    const textEl = document.createElement("div");
-    textEl.className = "result-text";
-    textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
-    meta.appendChild(textEl);
-    if (res.source === "ocr" && res.corrected) {
-      const rawEl = document.createElement("div");
-      rawEl.className = "result-raw";
-      rawEl.textContent = "OCR read: " + res.rawText;
-      meta.appendChild(rawEl);
-    }
-    if (res.reasons && res.reasons.length) {
-      const why = document.createElement("ul");
-      why.className = "result-why";
-      for (const line of res.reasons) {
-        const li = document.createElement("li");
-        li.textContent = line;
-        why.appendChild(li);
-      }
-      meta.appendChild(why);
-    }
-    if (res.source === "ocr") {
-      const conf = document.createElement("div");
-      conf.className = "result-conf";
-      conf.textContent = "OCR was " + Math.round(res.confidence) + "% sure of this read overall.";
-      meta.appendChild(conf);
-    }
-    el.appendChild(meta);
-    el.addEventListener("click", () => jumpToResult(i));
-    return el;
-  }
-  var confidenceOf = (res) => res.source === "ocr" ? res.confidence : 100;
-  function compareResults(a, b) {
-    if (!!a.whole !== !!b.whole) return a.whole ? -1 : 1;
-    if (a.fuzzy !== b.fuzzy) return a.fuzzy ? 1 : -1;
-    if (a.fuzzy && b.fuzzy) {
-      const byConf = confidenceOf(b) - confidenceOf(a);
-      if (byConf) return byConf;
-    }
-    const byScore = (b.score || 0) - (a.score || 0);
-    if (byScore) return byScore;
-    return a.page - b.page;
-  }
-  function renderResultsList() {
-    resultsList.innerHTML = "";
-    if (!S.lastResults.length) {
-      const note = document.createElement("div");
-      note.className = "empty-note";
-      note.textContent = S.currentQuery.norm ? "No matches yet \u2014 including after allowing for characters OCR may have lost. If you can see the tag on the sheet, use Fix text on whatever OCR did read there." : "Enter a tag number or string and press Search.";
-      resultsList.appendChild(note);
-      return;
-    }
-    const grouped = new Map(BANDS.map((b) => [b, []]));
-    S.lastResults.forEach((res, i) => grouped.get(bandOf(res)).push([res, i]));
-    for (const group of grouped.values()) group.sort((a, b) => compareResults(a[0], b[0]));
-    const populated = BANDS.filter((b) => grouped.get(b).length);
-    for (const band of populated) {
-      const group = grouped.get(band);
-      const head = document.createElement("div");
-      head.className = "band-head band-" + band;
-      head.innerHTML = '<span class="band-title"></span><span class="band-count"></span>';
-      head.querySelector(".band-title").textContent = BAND_LABEL[band];
-      head.querySelector(".band-count").textContent = group.length;
-      const rows = document.createElement("div");
-      for (const [res, i] of group) rows.appendChild(buildResultElement(res, i));
-      if (band === "possible" && populated.length > 1) {
-        const box = document.createElement("details");
-        box.className = "band-collapse";
-        const sum = document.createElement("summary");
-        sum.appendChild(head);
-        box.appendChild(sum);
-        const note = document.createElement("div");
-        note.className = "band-note";
-        note.textContent = BAND_NOTE[band];
-        box.appendChild(note);
-        box.appendChild(rows);
-        resultsList.appendChild(box);
-      } else {
-        resultsList.appendChild(head);
-        if (BAND_NOTE[band]) {
-          const note = document.createElement("div");
-          note.className = "band-note";
-          note.textContent = BAND_NOTE[band];
-          resultsList.appendChild(note);
-        }
-        resultsList.appendChild(rows);
-      }
-    }
-  }
-  function openFixEditor(itemEl, metaEl, res) {
-    if (metaEl.querySelector(".fix-row")) return;
-    const row = document.createElement("div");
-    row.className = "fix-row";
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = res.text;
-    input.setAttribute("aria-label", "Correct text for this match");
-    const save = document.createElement("button");
-    save.textContent = "Save";
-    const cancel = document.createElement("button");
-    cancel.className = "cancel";
-    cancel.textContent = "Cancel";
-    row.appendChild(input);
-    row.appendChild(save);
-    row.appendChild(cancel);
-    metaEl.appendChild(row);
-    input.focus();
-    input.select();
-    const stop = (ev) => ev.stopPropagation();
-    row.addEventListener("click", stop);
-    function commit() {
-      setCorrection(res.rawText, input.value.trim());
-      runFullSearch();
-    }
-    save.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      commit();
-    });
-    cancel.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      row.remove();
-    });
-    input.addEventListener("keydown", (ev) => {
-      ev.stopPropagation();
-      if (ev.key === "Enter") commit();
-      if (ev.key === "Escape") row.remove();
-    });
-  }
-  function highlightMatch(text, pos, len) {
-    if (typeof pos !== "number" || !len) return escapeHtml(text);
-    let rawStart = -1, rawEnd = -1, keptCount = 0;
-    for (let i = 0; i < text.length; i++) {
-      const isKept = /[A-Za-z0-9]/.test(text[i]);
-      if (isKept) {
-        if (keptCount === pos) rawStart = i;
-        if (keptCount === pos + len - 1) {
-          rawEnd = i + 1;
-          break;
-        }
-        keptCount++;
-      }
-    }
-    if (rawStart === -1) return escapeHtml(text);
-    if (rawEnd === -1) rawEnd = text.length;
-    return escapeHtml(text.slice(0, rawStart)) + "<mark>" + escapeHtml(text.slice(rawStart, rawEnd)) + "</mark>" + escapeHtml(text.slice(rawEnd));
-  }
-  async function buildThumbnail(res, canvasEl) {
-    const ctx = canvasEl.getContext("2d");
-    const data = S.pageData.get(res.page);
-    let src = data.thumbCanvas;
-    let srcScale = data.thumbScale;
-    if (!src) {
-      const page = await getPageProxy(res.page);
-      const vp = page.getViewport({ scale: 1.6 });
-      const c = document.createElement("canvas");
-      c.width = Math.ceil(vp.width);
-      c.height = Math.ceil(vp.height);
-      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-      data.thumbCanvas = c;
-      data.thumbScale = 1.6;
-      src = c;
-      srcScale = 1.6;
-    }
-    let box;
-    if (res.source === "text") {
-      const page = await getPageProxy(res.page);
-      const vp = page.getViewport({ scale: srcScale });
-      const pts = [];
-      for (const idx of res.itemIndices) {
-        const it = data.textItems[idx];
-        pts.push(...itemQuadCanvas(it, vp));
-      }
-      box = boundsOfPoints(pts);
-    } else {
-      const ratio = srcScale / data.thumbScale;
-      box = { minX: res.bbox.x0 * ratio, minY: res.bbox.y0 * ratio, maxX: res.bbox.x1 * ratio, maxY: res.bbox.y1 * ratio };
-    }
-    const w = box.maxX - box.minX, h = box.maxY - box.minY;
-    const padX = Math.max(w * 0.6, 24), padY = Math.max(h * 0.8, 16);
-    let sx = box.minX - padX, sy = box.minY - padY;
-    let sw = w + padX * 2, sh = h + padY * 2;
-    sx = clamp(sx, 0, src.width);
-    sy = clamp(sy, 0, src.height);
-    sw = clamp(sw, 4, src.width - sx);
-    sh = clamp(sh, 4, src.height - sy);
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
-    const scaleFit = Math.min(canvasEl.width / sw, canvasEl.height / sh);
-    const dw = sw * scaleFit, dh = sh * scaleFit;
-    const dx = (canvasEl.width - dw) / 2, dy = (canvasEl.height - dh) / 2;
-    ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh);
-  }
-
   // src/app/markup.js
   function syncMarkupModeUI() {
     const active = S.mode === "markup";
@@ -2293,6 +2082,16 @@
     }
     await commitStroke("polyline", pts);
   }
+  function seedPolyline(canvasPts) {
+    cancelPolyline();
+    S.mode = "markup";
+    S.markupTool = "polyline";
+    markupToolSelect.value = "polyline";
+    syncMarkupModeUI();
+    markupHintWrap.hidden = false;
+    polylinePoints = canvasPts.slice();
+    refreshOverlay().then(() => drawPolyline(polylinePoints));
+  }
   overlayCanvas.addEventListener("click", (e) => {
     if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline") return;
     const pt = canvasPointFromEvent(e);
@@ -2361,6 +2160,522 @@
     await refreshOverlay();
     updateMarkupButtons();
   });
+
+  // src/lib/vectorlines.js
+  var NODE_SNAP_TOLERANCE = 1.5;
+  var MIN_PIPE_SEGMENT_LEN = 8;
+  var COLLINEAR_ANGLE_TOL = 2 * Math.PI / 180;
+  var ANCHOR_RADIUS_FACTOR = 3;
+  var IDENTITY_MATRIX = [1, 0, 0, 1, 0, 0];
+  function applyCTM(m, x, y) {
+    return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+  }
+  function composeCTM(ctm, args) {
+    const [a0, b0, c0, d0, e0, f0] = ctm;
+    const [a1, b1, c1, d1, e1, f1] = args;
+    return [
+      a0 * a1 + c0 * b1,
+      b0 * a1 + d0 * b1,
+      a0 * c1 + c0 * d1,
+      b0 * c1 + d0 * d1,
+      a0 * e1 + c0 * f1 + e0,
+      b0 * e1 + d0 * f1 + f0
+    ];
+  }
+  function segmentsFromOperatorList(opList, OPS) {
+    const segments = [];
+    const filledShapes = [];
+    const ctmStack = [];
+    let ctm = IDENTITY_MATRIX;
+    let lineWidth = 1;
+    let dash = null;
+    let subpaths = [];
+    let cur = null;
+    function startSubpath(pt) {
+      cur = { points: [pt], closed: false, hasCurve: false };
+      subpaths.push(cur);
+    }
+    function ensureCur(pt) {
+      if (!cur) startSubpath(pt);
+    }
+    function lineOrCurveTo(pt, isCurve) {
+      ensureCur(pt);
+      cur.points.push(pt);
+      if (isCurve) cur.hasCurve = true;
+    }
+    function runPathOps(opsCodes, coords) {
+      let o = 0;
+      for (const opCode of opsCodes) {
+        if (opCode === OPS.moveTo) {
+          startSubpath(applyCTM(ctm, coords[o++], coords[o++]));
+        } else if (opCode === OPS.lineTo) {
+          lineOrCurveTo(applyCTM(ctm, coords[o++], coords[o++]), false);
+        } else if (opCode === OPS.curveTo) {
+          const pt = applyCTM(ctm, coords[o + 4], coords[o + 5]);
+          o += 6;
+          lineOrCurveTo(pt, true);
+        } else if (opCode === OPS.curveTo2 || opCode === OPS.curveTo3) {
+          const pt = applyCTM(ctm, coords[o + 2], coords[o + 3]);
+          o += 4;
+          lineOrCurveTo(pt, true);
+        } else if (opCode === OPS.rectangle) {
+          const x = coords[o++], y = coords[o++], w = coords[o++], h = coords[o++];
+          const p0 = applyCTM(ctm, x, y), p1 = applyCTM(ctm, x + w, y);
+          const p2 = applyCTM(ctm, x + w, y + h), p3 = applyCTM(ctm, x, y + h);
+          cur = { points: [p0, p1, p2, p3, p0], closed: true, hasCurve: false };
+          subpaths.push(cur);
+        } else if (opCode === OPS.closePath) {
+          if (cur && cur.points.length) {
+            cur.closed = true;
+            const first = cur.points[0], last = cur.points[cur.points.length - 1];
+            if (first[0] !== last[0] || first[1] !== last[1]) cur.points.push(first);
+          }
+          cur = null;
+        }
+      }
+    }
+    function flushSubpaths(stroke, fill) {
+      for (const sp of subpaths) {
+        if (sp.hasCurve) continue;
+        if (fill) filledShapes.push(boundsOfPoints(sp.points));
+        if (stroke) {
+          for (let j = 1; j < sp.points.length; j++) {
+            const [x0, y0] = sp.points[j - 1];
+            const [x1, y1] = sp.points[j];
+            if (x0 === x1 && y0 === y1) continue;
+            segments.push({ x0, y0, x1, y1, strokeWidth: lineWidth, dash, closed: sp.closed });
+          }
+        }
+      }
+      subpaths = [];
+      cur = null;
+    }
+    const singlePathOps = /* @__PURE__ */ new Set([
+      OPS.moveTo,
+      OPS.lineTo,
+      OPS.curveTo,
+      OPS.curveTo2,
+      OPS.curveTo3,
+      OPS.rectangle,
+      OPS.closePath
+    ]);
+    const strokeOnlyOps = /* @__PURE__ */ new Set([OPS.stroke, OPS.closeStroke]);
+    const strokeAndFillOps = /* @__PURE__ */ new Set([OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
+    const fillOnlyOps = /* @__PURE__ */ new Set([OPS.fill, OPS.eoFill]);
+    const { fnArray, argsArray } = opList;
+    for (let i = 0; i < fnArray.length; i++) {
+      const fn = fnArray[i];
+      const args = argsArray[i];
+      if (fn === OPS.save) {
+        ctmStack.push(ctm);
+      } else if (fn === OPS.restore) {
+        ctm = ctmStack.pop() || IDENTITY_MATRIX;
+      } else if (fn === OPS.transform) {
+        ctm = composeCTM(ctm, args);
+      } else if (fn === OPS.setLineWidth) {
+        lineWidth = args[0];
+      } else if (fn === OPS.setDash) {
+        dash = args[0] && args[0].length ? args[0] : null;
+      } else if (fn === OPS.constructPath) {
+        runPathOps(args[0], args[1]);
+      } else if (singlePathOps.has(fn)) {
+        runPathOps([fn], args || []);
+      } else if (strokeOnlyOps.has(fn)) {
+        flushSubpaths(true, false);
+      } else if (strokeAndFillOps.has(fn)) {
+        flushSubpaths(true, true);
+      } else if (fillOnlyOps.has(fn)) {
+        flushSubpaths(false, true);
+      } else if (fn === OPS.endPath || fn === OPS.clip || fn === OPS.eoClip) {
+        subpaths = [];
+        cur = null;
+      }
+    }
+    return { segments, filledShapes };
+  }
+  async function extractVectorSegments(page) {
+    const opList = await page.getOperatorList();
+    return segmentsFromOperatorList(opList, pdfjsLib.OPS);
+  }
+  function buildLineGraph(segments, filledShapes = []) {
+    const openSegments = segments.filter((s) => !s.closed);
+    const nodes = [];
+    const nodeIndex = /* @__PURE__ */ new Map();
+    function findOrCreateNode(x, y) {
+      const bx = Math.round(x / NODE_SNAP_TOLERANCE);
+      const by = Math.round(y / NODE_SNAP_TOLERANCE);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const ids = nodeIndex.get(bx + dx + "_" + (by + dy));
+          if (!ids) continue;
+          for (const id2 of ids) {
+            const n = nodes[id2];
+            if (Math.hypot(n.x - x, n.y - y) <= NODE_SNAP_TOLERANCE) return id2;
+          }
+        }
+      }
+      const id = nodes.length;
+      nodes.push({ id, x, y });
+      const key = bx + "_" + by;
+      if (!nodeIndex.has(key)) nodeIndex.set(key, []);
+      nodeIndex.get(key).push(id);
+      return id;
+    }
+    const edges = [];
+    for (const s of openSegments) {
+      const a = findOrCreateNode(s.x0, s.y0);
+      const b = findOrCreateNode(s.x1, s.y1);
+      if (a === b) continue;
+      const length = Math.hypot(nodes[b].x - nodes[a].x, nodes[b].y - nodes[a].y);
+      edges.push({ id: edges.length, a, b, strokeWidth: s.strokeWidth, dash: s.dash, length });
+    }
+    const adjacency = /* @__PURE__ */ new Map();
+    for (const e of edges) {
+      if (!adjacency.has(e.a)) adjacency.set(e.a, []);
+      if (!adjacency.has(e.b)) adjacency.set(e.b, []);
+      adjacency.get(e.a).push(e.id);
+      adjacency.get(e.b).push(e.id);
+    }
+    const keptIds = new Set(edges.map((e) => e.id));
+    for (const e of edges) {
+      if (e.length >= MIN_PIPE_SEGMENT_LEN) continue;
+      const degA = (adjacency.get(e.a) || []).length;
+      const degB = (adjacency.get(e.b) || []).length;
+      if (degA <= 1 && degB <= 1) keptIds.delete(e.id);
+    }
+    const finalEdges = edges.filter((e) => keptIds.has(e.id));
+    const finalAdjacency = /* @__PURE__ */ new Map();
+    for (const e of finalEdges) {
+      if (!finalAdjacency.has(e.a)) finalAdjacency.set(e.a, []);
+      if (!finalAdjacency.has(e.b)) finalAdjacency.set(e.b, []);
+      finalAdjacency.get(e.a).push(e.id);
+      finalAdjacency.get(e.b).push(e.id);
+    }
+    return { nodes, edges: finalEdges, adjacency: finalAdjacency, filledShapes };
+  }
+  function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq)) : 0;
+    const cx = ax + t * dx, cy = ay + t * dy;
+    return { dist: Math.hypot(px - cx, py - cy), t, x: cx, y: cy };
+  }
+  function anchorPointForTag(graph, tagBbox) {
+    const cx = (tagBbox.minX + tagBbox.maxX) / 2;
+    const cy = (tagBbox.minY + tagBbox.maxY) / 2;
+    const w = tagBbox.maxX - tagBbox.minX;
+    const h = tagBbox.maxY - tagBbox.minY;
+    const radius = Math.max(w, h, 1) * ANCHOR_RADIUS_FACTOR;
+    let best = null;
+    let bestScore = Infinity;
+    for (const e of graph.edges) {
+      const a = graph.nodes[e.a], b = graph.nodes[e.b];
+      const hit = pointToSegmentDistance(cx, cy, a.x, a.y, b.x, b.y);
+      if (hit.dist > radius) continue;
+      const below = hit.y > tagBbox.maxY ? 1 : 0;
+      const score = hit.dist - below * (h * 0.5);
+      if (score < bestScore) {
+        bestScore = score;
+        best = { edge: e, point: [hit.x, hit.y] };
+      }
+    }
+    return best;
+  }
+  function isNearFilledShape(graph, x, y, pad = 2) {
+    for (const box of graph.filledShapes) {
+      if (x >= box.minX - pad && x <= box.maxX + pad && y >= box.minY - pad && y <= box.maxY + pad) return true;
+    }
+    return false;
+  }
+  function simplifyCollinear(points) {
+    if (points.length <= 2) return points;
+    const out = [points[0]];
+    for (let i = 1; i < points.length - 1; i++) {
+      const [ax, ay] = out[out.length - 1];
+      const [bx, by] = points[i];
+      const [cx, cy] = points[i + 1];
+      const a1 = Math.atan2(by - ay, bx - ax);
+      const a2 = Math.atan2(cy - by, cx - bx);
+      let diff = Math.abs(a1 - a2);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
+      if (diff > COLLINEAR_ANGLE_TOL) out.push(points[i]);
+    }
+    out.push(points[points.length - 1]);
+    return out;
+  }
+  function traceFromAnchor(graph, anchor) {
+    if (!anchor) return null;
+    const { edge, point } = anchor;
+    function walk(startNodeId, cameFromEdgeId) {
+      const path = [];
+      let currentNode = startNodeId;
+      let prevEdge = cameFromEdgeId;
+      while (true) {
+        const n = graph.nodes[currentNode];
+        path.push([n.x, n.y]);
+        if (isNearFilledShape(graph, n.x, n.y)) break;
+        const forward = (graph.adjacency.get(currentNode) || []).filter((id) => id !== prevEdge);
+        if (forward.length !== 1) break;
+        const nextEdge = graph.edges[forward[0]];
+        currentNode = nextEdge.a === currentNode ? nextEdge.b : nextEdge.a;
+        prevEdge = forward[0];
+      }
+      return path;
+    }
+    const towardA = walk(edge.a, edge.id).reverse();
+    const towardB = walk(edge.b, edge.id);
+    const full = [...towardA, point, ...towardB];
+    return simplifyCollinear(full);
+  }
+
+  // src/app/autotrace.js
+  async function startAutoTrace(i) {
+    const res = S.lastResults[i];
+    if (!res || res.source !== "text") return;
+    await jumpToResult(i);
+    const page = await getPageProxy(res.page);
+    const data = S.pageData.get(res.page);
+    if (!data.vectorGraph) {
+      const { segments, filledShapes } = await extractVectorSegments(page);
+      data.vectorGraph = buildLineGraph(segments, filledShapes);
+    }
+    const pts = [];
+    for (const idx of res.itemIndices) pts.push(...itemQuadPdfSpace(data.textItems[idx]));
+    const tagBbox = boundsOfPoints(pts);
+    const anchor = anchorPointForTag(data.vectorGraph, tagBbox);
+    const tracedPdfPoints = anchor ? traceFromAnchor(data.vectorGraph, anchor) : null;
+    const viewport = page.getViewport({ scale: S.scale });
+    if (tracedPdfPoints && tracedPdfPoints.length >= 2) {
+      seedPolyline(tracedPdfPoints.map(([x, y]) => applyMatrix(viewport.transform, x, y)));
+    } else {
+      const cx = (tagBbox.minX + tagBbox.maxX) / 2;
+      const cy = (tagBbox.minY + tagBbox.maxY) / 2;
+      seedPolyline([applyMatrix(viewport.transform, cx, cy)]);
+    }
+  }
+
+  // src/app/results.js
+  function buildResultElement(res, i) {
+    const el = document.createElement("div");
+    el.className = "result-item" + (i === S.activeResultIndex ? " active" : "");
+    el.dataset.index = i;
+    const thumbWrap = document.createElement("div");
+    thumbWrap.className = "result-thumb";
+    const thumbCanvas = document.createElement("canvas");
+    thumbCanvas.width = 120;
+    thumbCanvas.height = 68;
+    thumbWrap.appendChild(thumbCanvas);
+    el.appendChild(thumbWrap);
+    buildThumbnail(res, thumbCanvas);
+    const meta = document.createElement("div");
+    meta.className = "result-meta";
+    const pct = confidencePercent(res);
+    const pctTier = pct >= 90 ? "high" : pct >= 70 ? "med" : "low";
+    const pctTitle = res.reasons && res.reasons.length ? res.reasons.join("\n") : "";
+    const topRow = document.createElement("div");
+    topRow.className = "result-top-row";
+    topRow.innerHTML = '<span class="badge badge-page">Page ' + res.page + '</span><span class="badge ' + (res.source === "text" ? "badge-text" : "badge-ocr") + '">' + (res.source === "text" ? "TEXT" : "OCR") + "</span>" + (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) \u2014 check the crop">GLYPH</span>' : "") + (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : "") + (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : "") + '<span class="badge badge-conf badge-conf-' + pctTier + '" title="' + escapeHtml(pctTitle) + '">' + pct + "%</span>";
+    if (res.source === "ocr") {
+      const fixBtn = document.createElement("button");
+      fixBtn.className = "fix-btn";
+      fixBtn.textContent = res.corrected ? "Edit fix" : "Fix text";
+      fixBtn.title = "Tell the tool what this actually says \u2014 it will remember and apply it everywhere";
+      fixBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        openFixEditor(el, meta, res);
+      });
+      topRow.appendChild(fixBtn);
+    } else if (res.source === "text") {
+      const traceBtn = document.createElement("button");
+      traceBtn.className = "trace-btn";
+      traceBtn.textContent = "Mark up";
+      traceBtn.title = "Auto-trace the line associated with this tag";
+      traceBtn.hidden = true;
+      traceBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        startAutoTrace(i);
+      });
+      topRow.appendChild(traceBtn);
+      pageIsVector(res.page).then((isVector) => {
+        traceBtn.hidden = !isVector;
+      });
+    }
+    meta.appendChild(topRow);
+    const textEl = document.createElement("div");
+    textEl.className = "result-text";
+    textEl.innerHTML = highlightMatch(res.text, res.matchPos, res.matchLen);
+    meta.appendChild(textEl);
+    if (res.source === "ocr" && res.corrected) {
+      const rawEl = document.createElement("div");
+      rawEl.className = "result-raw";
+      rawEl.textContent = "OCR read: " + res.rawText;
+      meta.appendChild(rawEl);
+    }
+    el.appendChild(meta);
+    el.addEventListener("click", () => jumpToResult(i));
+    return el;
+  }
+  var confidenceOf = (res) => res.source === "ocr" ? res.confidence : 100;
+  function compareResults(a, b) {
+    if (!!a.whole !== !!b.whole) return a.whole ? -1 : 1;
+    if (a.fuzzy !== b.fuzzy) return a.fuzzy ? 1 : -1;
+    if (a.fuzzy && b.fuzzy) {
+      const byConf = confidenceOf(b) - confidenceOf(a);
+      if (byConf) return byConf;
+    }
+    const byScore = (b.score || 0) - (a.score || 0);
+    if (byScore) return byScore;
+    return a.page - b.page;
+  }
+  function renderResultsList() {
+    resultsList.innerHTML = "";
+    if (!S.lastResults.length) {
+      const note = document.createElement("div");
+      note.className = "empty-note";
+      note.textContent = S.currentQuery.norm ? "No matches yet \u2014 including after allowing for characters OCR may have lost. If you can see the tag on the sheet, use Fix text on whatever OCR did read there." : "Enter a tag number or string and press Search.";
+      resultsList.appendChild(note);
+      return;
+    }
+    const grouped = new Map(BANDS.map((b) => [b, []]));
+    S.lastResults.forEach((res, i) => grouped.get(bandOf(res)).push([res, i]));
+    for (const group of grouped.values()) group.sort((a, b) => compareResults(a[0], b[0]));
+    const populated = BANDS.filter((b) => grouped.get(b).length);
+    for (const band of populated) {
+      const group = grouped.get(band);
+      const head = document.createElement("div");
+      head.className = "band-head band-" + band;
+      head.innerHTML = '<span class="band-title"></span><span class="band-count"></span>';
+      head.querySelector(".band-title").textContent = BAND_LABEL[band];
+      head.querySelector(".band-count").textContent = group.length;
+      const rows = document.createElement("div");
+      for (const [res, i] of group) rows.appendChild(buildResultElement(res, i));
+      if (band === "possible" && populated.length > 1) {
+        const box = document.createElement("details");
+        box.className = "band-collapse";
+        const sum = document.createElement("summary");
+        sum.appendChild(head);
+        box.appendChild(sum);
+        const note = document.createElement("div");
+        note.className = "band-note";
+        note.textContent = BAND_NOTE[band];
+        box.appendChild(note);
+        box.appendChild(rows);
+        resultsList.appendChild(box);
+      } else {
+        resultsList.appendChild(head);
+        if (BAND_NOTE[band]) {
+          const note = document.createElement("div");
+          note.className = "band-note";
+          note.textContent = BAND_NOTE[band];
+          resultsList.appendChild(note);
+        }
+        resultsList.appendChild(rows);
+      }
+    }
+  }
+  function openFixEditor(itemEl, metaEl, res) {
+    if (metaEl.querySelector(".fix-row")) return;
+    const row = document.createElement("div");
+    row.className = "fix-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = res.text;
+    input.setAttribute("aria-label", "Correct text for this match");
+    const save = document.createElement("button");
+    save.textContent = "Save";
+    const cancel = document.createElement("button");
+    cancel.className = "cancel";
+    cancel.textContent = "Cancel";
+    row.appendChild(input);
+    row.appendChild(save);
+    row.appendChild(cancel);
+    metaEl.appendChild(row);
+    input.focus();
+    input.select();
+    const stop = (ev) => ev.stopPropagation();
+    row.addEventListener("click", stop);
+    function commit() {
+      setCorrection(res.rawText, input.value.trim());
+      runFullSearch();
+    }
+    save.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      commit();
+    });
+    cancel.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      row.remove();
+    });
+    input.addEventListener("keydown", (ev) => {
+      ev.stopPropagation();
+      if (ev.key === "Enter") commit();
+      if (ev.key === "Escape") row.remove();
+    });
+  }
+  function highlightMatch(text, pos, len) {
+    if (typeof pos !== "number" || !len) return escapeHtml(text);
+    let rawStart = -1, rawEnd = -1, keptCount = 0;
+    for (let i = 0; i < text.length; i++) {
+      const isKept = /[A-Za-z0-9]/.test(text[i]);
+      if (isKept) {
+        if (keptCount === pos) rawStart = i;
+        if (keptCount === pos + len - 1) {
+          rawEnd = i + 1;
+          break;
+        }
+        keptCount++;
+      }
+    }
+    if (rawStart === -1) return escapeHtml(text);
+    if (rawEnd === -1) rawEnd = text.length;
+    return escapeHtml(text.slice(0, rawStart)) + "<mark>" + escapeHtml(text.slice(rawStart, rawEnd)) + "</mark>" + escapeHtml(text.slice(rawEnd));
+  }
+  async function buildThumbnail(res, canvasEl) {
+    const ctx = canvasEl.getContext("2d");
+    const data = S.pageData.get(res.page);
+    let src = data.thumbCanvas;
+    let srcScale = data.thumbScale;
+    if (!src) {
+      const page = await getPageProxy(res.page);
+      const vp = page.getViewport({ scale: 1.6 });
+      const c = document.createElement("canvas");
+      c.width = Math.ceil(vp.width);
+      c.height = Math.ceil(vp.height);
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      data.thumbCanvas = c;
+      data.thumbScale = 1.6;
+      src = c;
+      srcScale = 1.6;
+    }
+    let box;
+    if (res.source === "text") {
+      const page = await getPageProxy(res.page);
+      const vp = page.getViewport({ scale: srcScale });
+      const pts = [];
+      for (const idx of res.itemIndices) {
+        const it = data.textItems[idx];
+        pts.push(...itemQuadCanvas(it, vp));
+      }
+      box = boundsOfPoints(pts);
+    } else {
+      const ratio = srcScale / data.thumbScale;
+      box = { minX: res.bbox.x0 * ratio, minY: res.bbox.y0 * ratio, maxX: res.bbox.x1 * ratio, maxY: res.bbox.y1 * ratio };
+    }
+    const w = box.maxX - box.minX, h = box.maxY - box.minY;
+    const padX = Math.max(w * 0.6, 24), padY = Math.max(h * 0.8, 16);
+    let sx = box.minX - padX, sy = box.minY - padY;
+    let sw = w + padX * 2, sh = h + padY * 2;
+    sx = clamp(sx, 0, src.width);
+    sy = clamp(sy, 0, src.height);
+    sw = clamp(sw, 4, src.width - sx);
+    sh = clamp(sh, 4, src.height - sy);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+    const scaleFit = Math.min(canvasEl.width / sw, canvasEl.height / sh);
+    const dw = sw * scaleFit, dh = sh * scaleFit;
+    const dx = (canvasEl.width - dw) / 2, dy = (canvasEl.height - dh) / 2;
+    ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh);
+  }
 
   // src/app/viewer.js
   async function renderPage(pageNum) {
@@ -2752,7 +3067,9 @@
           ocrLines: null,
           thumbCanvas: null,
           thumbScale: null,
-          rawLen: 0
+          rawLen: 0,
+          hasImage: void 0,
+          vectorGraph: null
         });
       }
       emptyViewer.style.display = "none";
@@ -2855,11 +3172,23 @@
       data.lineGroups = groupItemsIntoLines(items);
     }
     const hasImage = await pageHasImage(page);
+    data.hasImage = hasImage;
     const confidentTextLayer = rawLen > TEXT_LEN_THRESHOLD && !hasImage;
     if (confidentTextLayer) {
       data.status = "text-done";
     }
     return confidentTextLayer;
+  }
+  async function pageIsVector(pageNum) {
+    const data = S.pageData.get(pageNum);
+    if (!data) return false;
+    let hasImage = data.hasImage;
+    if (hasImage === void 0) {
+      const page = await getPageProxy(pageNum);
+      hasImage = await pageHasImage(page);
+      data.hasImage = hasImage;
+    }
+    return !hasImage;
   }
   function groupItemsIntoLines(items) {
     const enriched = items.map((it, idx) => {

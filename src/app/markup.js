@@ -229,6 +229,22 @@ async function finishPolyline(pts) {
   await commitStroke('polyline', pts);
 }
 
+// Pre-fills the in-progress polyline (canvas-space points) from an
+// auto-trace and drops the user into the same click-to-extend/Enter-to-
+// commit flow as a manually-drawn one — see autotrace.js. Nothing is
+// written to S.markups until the user finishes it themselves, so a wrong or
+// incomplete auto-trace is always reviewed, never committed blind.
+function seedPolyline(canvasPts) {
+  cancelPolyline();
+  S.mode = 'markup';
+  S.markupTool = 'polyline';
+  markupToolSelect.value = 'polyline';
+  syncMarkupModeUI();
+  markupHintWrap.hidden = false;
+  polylinePoints = canvasPts.slice();
+  refreshOverlay().then(() => drawPolyline(polylinePoints));
+}
+
 overlayCanvas.addEventListener('click', (e) => {
   if (S.mode !== 'markup' || !S.pdfDoc || S.markupTool !== 'polyline') return;
   const pt = canvasPointFromEvent(e);
@@ -320,4 +336,5 @@ export {
   canvasPointFromEvent,
   hitTestStroke,
   selectStroke,
+  seedPolyline,
 };

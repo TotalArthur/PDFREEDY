@@ -9,7 +9,7 @@ const S = {
   currentPage: 1,
   scale: 1.5,
   pageProxyCache: new Map(),   // pageNum -> pdf.js page proxy promise
-  pageData: new Map(),         // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen }
+  pageData: new Map(),         // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen, hasImage, vectorGraph }
   lastResults: [],             // current search result set
   activeResultIndex: -1,
   ocrScheduler: null,          // lazily-created tesseract worker pool (Tesseract.createScheduler)

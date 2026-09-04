@@ -92,7 +92,7 @@ async function loadPdf(file) {
         textItems: null, lineGroups: null,
         ocrWords: null, ocrLines: null,
         thumbCanvas: null, thumbScale: null,
-        rawLen: 0
+        rawLen: 0, hasImage: undefined, vectorGraph: null,
       });
     }
 

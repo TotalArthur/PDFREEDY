@@ -194,15 +194,23 @@
   .badge-confused { background: #3d3218; color: #e8bf5a; }
   .badge-fixed { background: #123a3f; color: #4fd8e6; }
   .badge-page { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
+  .badge-conf { cursor: default; }
+  .badge-conf-high { background: #274a2e; color: var(--good); }
+  .badge-conf-med { background: #4a3d1c; color: var(--warn); }
+  .badge-conf-low { background: #4a2222; color: var(--bad); }
   .result-text { font-family: var(--mono); font-size: 13px; word-break: break-word; }
   .result-text mark { background: #5a4611; color: #ffd873; border-radius: 2px; padding: 0 1px; }
-  .result-conf { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; }
   .result-raw { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; font-family: var(--mono); }
   .fix-btn {
     background: none; border: 1px solid var(--border); color: var(--text-dim);
     border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
   }
   .fix-btn:hover { color: var(--text); border-color: var(--accent); }
+  .trace-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
+  }
+  .trace-btn:hover { color: var(--text); border-color: var(--accent); }
   .fix-row { display: flex; gap: 5px; margin-top: 5px; }
   .fix-row input {
     flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; padding: 4px 6px;
@@ -238,13 +246,6 @@
     content: '▸'; color: var(--text-dim); font-size: 12px;
   }
   .band-collapse[open] > summary .band-head::after { content: '▾'; }
-
-  .result-why {
-    margin: 5px 0 0; padding: 0 0 0 13px;
-    color: var(--text-dim); font-size: 11.5px; line-height: 1.45;
-  }
-  .result-why li { margin: 1px 0; }
-  .result-why li::marker { color: #4f6b8a; }
 
   .empty-note { color: var(--text-dim); font-size: 12.5px; padding: 10px 6px; line-height: 1.5; }
   #correctionsBar {
