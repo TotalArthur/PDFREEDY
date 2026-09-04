@@ -203,6 +203,11 @@
     border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
   }
   .fix-btn:hover { color: var(--text); border-color: var(--accent); }
+  .trace-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
+  }
+  .trace-btn:hover { color: var(--text); border-color: var(--accent); }
   .fix-row { display: flex; gap: 5px; margin-top: 5px; }
   .fix-row input {
     flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; padding: 4px 6px;
@@ -556,7 +561,7 @@
     pageProxyCache: /* @__PURE__ */ new Map(),
     // pageNum -> pdf.js page proxy promise
     pageData: /* @__PURE__ */ new Map(),
-    // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen }
+    // pageNum -> { status, source, textItems, lineGroups, ocrWords, ocrLines, thumbCanvas, thumbScale, rawLen, hasImage, vectorGraph }
     lastResults: [],
     // current search result set
     activeResultIndex: -1,
@@ -1896,6 +1901,553 @@
     return res.cost <= res.subs * T1_COST + 1e-9 ? "likely" : "possible";
   }
 
+  // src/app/markup.js
+  function syncMarkupModeUI() {
+    const active = S.mode === "markup";
+    pencilBtn.classList.toggle("active", active);
+    overlayCanvas.classList.toggle("markup-active", active);
+  }
+  function selectStroke(id) {
+    if (S.selectedMarkupId === id) return;
+    S.selectedMarkupId = id;
+    refreshOverlay();
+  }
+  function closeHintPopover() {
+    markupHintPopover.hidden = true;
+  }
+  function updateMarkupButtons() {
+    const strokes = S.markups.get(S.currentPage);
+    const hasOnPage = !!(strokes && strokes.length);
+    markupUndoBtn.disabled = !hasOnPage;
+    markupClearBtn.disabled = !hasOnPage;
+    let anyMarkups = false;
+    for (const arr of S.markups.values()) {
+      if (arr.length) {
+        anyMarkups = true;
+        break;
+      }
+    }
+    markupExportBtn.disabled = !anyMarkups;
+  }
+  async function refreshOverlay() {
+    await drawHighlights();
+    await drawMarkups();
+  }
+  function canvasPointFromEvent(e) {
+    const rect = overlayCanvas.getBoundingClientRect();
+    const scaleX = overlayCanvas.width / rect.width;
+    const scaleY = overlayCanvas.height / rect.height;
+    return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
+  }
+  function distToSegment(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq)) : 0;
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+  }
+  async function hitTestStroke(pt) {
+    const strokes = S.markups.get(S.currentPage);
+    if (!strokes || !strokes.length) return null;
+    const page = await getPageProxy(S.currentPage);
+    const viewport = page.getViewport({ scale: S.scale });
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const s = strokes[i];
+      const canvasPts = s.points.map(([x, y]) => applyMatrix(viewport.transform, x, y));
+      const tolerance = Math.max(6, s.width * S.scale / 2 + 4);
+      for (let j = 1; j < canvasPts.length; j++) {
+        if (distToSegment(pt, canvasPts[j - 1], canvasPts[j]) <= tolerance) return s;
+      }
+    }
+    return null;
+  }
+  function drawSegment(p0, p1) {
+    overlayCtx.strokeStyle = S.markupColor;
+    overlayCtx.lineWidth = Math.max(1, S.markupWidth * S.scale);
+    overlayCtx.globalAlpha = S.markupOpacity;
+    overlayCtx.lineJoin = "round";
+    overlayCtx.lineCap = "round";
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(p0[0], p0[1]);
+    overlayCtx.lineTo(p1[0], p1[1]);
+    overlayCtx.stroke();
+    overlayCtx.globalAlpha = 1;
+  }
+  function drawPolyline(pts) {
+    for (let i = 1; i < pts.length; i++) drawSegment(pts[i - 1], pts[i]);
+  }
+  function commitStroke(tool, canvasPts) {
+    return (async () => {
+      const page = await getPageProxy(S.currentPage);
+      const viewport = page.getViewport({ scale: S.scale });
+      const pdfPoints = canvasPts.map(([x, y]) => pdfPointFromCanvas(viewport, x, y));
+      const stroke = {
+        id: "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+        tool,
+        color: S.markupColor,
+        width: S.markupWidth,
+        opacity: S.markupOpacity,
+        points: pdfPoints,
+        createdAt: Date.now()
+      };
+      if (!S.markups.has(S.currentPage)) S.markups.set(S.currentPage, []);
+      S.markups.get(S.currentPage).push(stroke);
+      await refreshOverlay();
+      updateMarkupButtons();
+    })();
+  }
+  pencilBtn.addEventListener("click", () => {
+    if (!S.pdfDoc) return;
+    S.mode = S.mode === "markup" ? "view" : "markup";
+    if (S.mode === "markup") selectStroke(null);
+    else cancelPolyline();
+    syncMarkupModeUI();
+  });
+  markupToolSelect.addEventListener("change", () => {
+    cancelPolyline();
+    selectStroke(null);
+    S.markupTool = markupToolSelect.value;
+    markupHintWrap.hidden = S.markupTool !== "polyline";
+    if (markupHintWrap.hidden) closeHintPopover();
+  });
+  markupHintBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    markupHintPopover.hidden = !markupHintPopover.hidden;
+  });
+  markupHintCloseBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeHintPopover();
+  });
+  document.addEventListener("click", (e) => {
+    if (!markupHintPopover.hidden && !markupHintWrap.contains(e.target)) closeHintPopover();
+  });
+  markupColorInput.addEventListener("input", () => {
+    S.markupColor = markupColorInput.value;
+  });
+  markupWidthInput.addEventListener("input", () => {
+    S.markupWidth = parseInt(markupWidthInput.value, 10) || 1;
+    markupWidthLabel.textContent = S.markupWidth + "px";
+  });
+  markupOpacityInput.addEventListener("input", () => {
+    S.markupOpacity = (parseInt(markupOpacityInput.value, 10) || 100) / 100;
+    markupOpacityLabel.textContent = Math.round(S.markupOpacity * 100) + "%";
+  });
+  var drawingActive = false;
+  var currentPoints = [];
+  overlayCanvas.addEventListener("mousedown", (e) => {
+    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool === "polyline") return;
+    e.preventDefault();
+    drawingActive = true;
+    currentPoints = [canvasPointFromEvent(e)];
+  });
+  window.addEventListener("mousemove", async (e) => {
+    if (!drawingActive) return;
+    const pt = canvasPointFromEvent(e);
+    if (S.markupTool === "line") {
+      currentPoints = [currentPoints[0], pt];
+      await refreshOverlay();
+      drawSegment(currentPoints[0], currentPoints[1]);
+    } else {
+      currentPoints.push(pt);
+      drawSegment(currentPoints[currentPoints.length - 2], pt);
+    }
+  });
+  window.addEventListener("mouseup", async () => {
+    if (!drawingActive) return;
+    drawingActive = false;
+    const pts = currentPoints;
+    currentPoints = [];
+    if (pts.length < 2) return;
+    await commitStroke(S.markupTool, pts);
+  });
+  var polylinePoints = [];
+  function polylineActive() {
+    return polylinePoints.length > 0;
+  }
+  function cancelPolyline() {
+    if (!polylineActive()) return;
+    polylinePoints = [];
+    refreshOverlay();
+  }
+  async function finishPolyline(pts) {
+    polylinePoints = [];
+    if (pts.length < 2) {
+      await refreshOverlay();
+      return;
+    }
+    await commitStroke("polyline", pts);
+  }
+  function seedPolyline(canvasPts) {
+    cancelPolyline();
+    S.mode = "markup";
+    S.markupTool = "polyline";
+    markupToolSelect.value = "polyline";
+    syncMarkupModeUI();
+    markupHintWrap.hidden = false;
+    polylinePoints = canvasPts.slice();
+    refreshOverlay().then(() => drawPolyline(polylinePoints));
+  }
+  overlayCanvas.addEventListener("click", (e) => {
+    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline") return;
+    const pt = canvasPointFromEvent(e);
+    if (!polylineActive()) {
+      polylinePoints = [pt];
+      return;
+    }
+    drawSegment(polylinePoints[polylinePoints.length - 1], pt);
+    polylinePoints.push(pt);
+  });
+  overlayCanvas.addEventListener("dblclick", async (e) => {
+    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline" || !polylineActive()) return;
+    e.preventDefault();
+    const pts = polylinePoints.slice(0, -1);
+    await finishPolyline(pts);
+  });
+  window.addEventListener("keydown", async (e) => {
+    if (S.mode !== "markup" || S.markupTool !== "polyline" || !polylineActive()) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      await finishPolyline(polylinePoints);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelPolyline();
+    }
+  });
+  window.addEventListener("mousemove", async (e) => {
+    if (S.mode !== "markup" || S.markupTool !== "polyline" || !polylineActive()) return;
+    const pt = canvasPointFromEvent(e);
+    await refreshOverlay();
+    drawPolyline([...polylinePoints, pt]);
+  });
+  async function deleteSelectedStroke() {
+    const strokes = S.markups.get(S.currentPage);
+    const idx = strokes ? strokes.findIndex((s) => s.id === S.selectedMarkupId) : -1;
+    if (idx === -1) return;
+    strokes.splice(idx, 1);
+    S.selectedMarkupId = null;
+    await refreshOverlay();
+    updateMarkupButtons();
+  }
+  window.addEventListener("keydown", async (e) => {
+    if (S.mode === "markup" || !S.selectedMarkupId) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      await deleteSelectedStroke();
+    } else if (e.key === "Escape") {
+      selectStroke(null);
+    }
+  });
+  markupUndoBtn.addEventListener("click", async () => {
+    const strokes = S.markups.get(S.currentPage);
+    if (!strokes || !strokes.length) return;
+    const removed = strokes.pop();
+    if (S.selectedMarkupId === removed.id) S.selectedMarkupId = null;
+    await refreshOverlay();
+    updateMarkupButtons();
+  });
+  markupClearBtn.addEventListener("click", async () => {
+    const strokes = S.markups.get(S.currentPage);
+    if (!strokes || !strokes.length) return;
+    S.markups.set(S.currentPage, []);
+    S.selectedMarkupId = null;
+    await refreshOverlay();
+    updateMarkupButtons();
+  });
+
+  // src/lib/vectorlines.js
+  var NODE_SNAP_TOLERANCE = 1.5;
+  var MIN_PIPE_SEGMENT_LEN = 8;
+  var COLLINEAR_ANGLE_TOL = 2 * Math.PI / 180;
+  var ANCHOR_RADIUS_FACTOR = 3;
+  var IDENTITY_MATRIX = [1, 0, 0, 1, 0, 0];
+  function applyCTM(m, x, y) {
+    return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+  }
+  function composeCTM(ctm, args) {
+    const [a0, b0, c0, d0, e0, f0] = ctm;
+    const [a1, b1, c1, d1, e1, f1] = args;
+    return [
+      a0 * a1 + c0 * b1,
+      b0 * a1 + d0 * b1,
+      a0 * c1 + c0 * d1,
+      b0 * c1 + d0 * d1,
+      a0 * e1 + c0 * f1 + e0,
+      b0 * e1 + d0 * f1 + f0
+    ];
+  }
+  function segmentsFromOperatorList(opList, OPS) {
+    const segments = [];
+    const filledShapes = [];
+    const ctmStack = [];
+    let ctm = IDENTITY_MATRIX;
+    let lineWidth = 1;
+    let dash = null;
+    let subpaths = [];
+    let cur = null;
+    function startSubpath(pt) {
+      cur = { points: [pt], closed: false, hasCurve: false };
+      subpaths.push(cur);
+    }
+    function ensureCur(pt) {
+      if (!cur) startSubpath(pt);
+    }
+    function lineOrCurveTo(pt, isCurve) {
+      ensureCur(pt);
+      cur.points.push(pt);
+      if (isCurve) cur.hasCurve = true;
+    }
+    function runPathOps(opsCodes, coords) {
+      let o = 0;
+      for (const opCode of opsCodes) {
+        if (opCode === OPS.moveTo) {
+          startSubpath(applyCTM(ctm, coords[o++], coords[o++]));
+        } else if (opCode === OPS.lineTo) {
+          lineOrCurveTo(applyCTM(ctm, coords[o++], coords[o++]), false);
+        } else if (opCode === OPS.curveTo) {
+          const pt = applyCTM(ctm, coords[o + 4], coords[o + 5]);
+          o += 6;
+          lineOrCurveTo(pt, true);
+        } else if (opCode === OPS.curveTo2 || opCode === OPS.curveTo3) {
+          const pt = applyCTM(ctm, coords[o + 2], coords[o + 3]);
+          o += 4;
+          lineOrCurveTo(pt, true);
+        } else if (opCode === OPS.rectangle) {
+          const x = coords[o++], y = coords[o++], w = coords[o++], h = coords[o++];
+          const p0 = applyCTM(ctm, x, y), p1 = applyCTM(ctm, x + w, y);
+          const p2 = applyCTM(ctm, x + w, y + h), p3 = applyCTM(ctm, x, y + h);
+          cur = { points: [p0, p1, p2, p3, p0], closed: true, hasCurve: false };
+          subpaths.push(cur);
+        } else if (opCode === OPS.closePath) {
+          if (cur && cur.points.length) {
+            cur.closed = true;
+            const first = cur.points[0], last = cur.points[cur.points.length - 1];
+            if (first[0] !== last[0] || first[1] !== last[1]) cur.points.push(first);
+          }
+          cur = null;
+        }
+      }
+    }
+    function flushSubpaths(stroke, fill) {
+      for (const sp of subpaths) {
+        if (sp.hasCurve) continue;
+        if (fill) filledShapes.push(boundsOfPoints(sp.points));
+        if (stroke) {
+          for (let j = 1; j < sp.points.length; j++) {
+            const [x0, y0] = sp.points[j - 1];
+            const [x1, y1] = sp.points[j];
+            if (x0 === x1 && y0 === y1) continue;
+            segments.push({ x0, y0, x1, y1, strokeWidth: lineWidth, dash, closed: sp.closed });
+          }
+        }
+      }
+      subpaths = [];
+      cur = null;
+    }
+    const singlePathOps = /* @__PURE__ */ new Set([
+      OPS.moveTo,
+      OPS.lineTo,
+      OPS.curveTo,
+      OPS.curveTo2,
+      OPS.curveTo3,
+      OPS.rectangle,
+      OPS.closePath
+    ]);
+    const strokeOnlyOps = /* @__PURE__ */ new Set([OPS.stroke, OPS.closeStroke]);
+    const strokeAndFillOps = /* @__PURE__ */ new Set([OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
+    const fillOnlyOps = /* @__PURE__ */ new Set([OPS.fill, OPS.eoFill]);
+    const { fnArray, argsArray } = opList;
+    for (let i = 0; i < fnArray.length; i++) {
+      const fn = fnArray[i];
+      const args = argsArray[i];
+      if (fn === OPS.save) {
+        ctmStack.push(ctm);
+      } else if (fn === OPS.restore) {
+        ctm = ctmStack.pop() || IDENTITY_MATRIX;
+      } else if (fn === OPS.transform) {
+        ctm = composeCTM(ctm, args);
+      } else if (fn === OPS.setLineWidth) {
+        lineWidth = args[0];
+      } else if (fn === OPS.setDash) {
+        dash = args[0] && args[0].length ? args[0] : null;
+      } else if (fn === OPS.constructPath) {
+        runPathOps(args[0], args[1]);
+      } else if (singlePathOps.has(fn)) {
+        runPathOps([fn], args || []);
+      } else if (strokeOnlyOps.has(fn)) {
+        flushSubpaths(true, false);
+      } else if (strokeAndFillOps.has(fn)) {
+        flushSubpaths(true, true);
+      } else if (fillOnlyOps.has(fn)) {
+        flushSubpaths(false, true);
+      } else if (fn === OPS.endPath || fn === OPS.clip || fn === OPS.eoClip) {
+        subpaths = [];
+        cur = null;
+      }
+    }
+    return { segments, filledShapes };
+  }
+  async function extractVectorSegments(page) {
+    const opList = await page.getOperatorList();
+    return segmentsFromOperatorList(opList, pdfjsLib.OPS);
+  }
+  function buildLineGraph(segments, filledShapes = []) {
+    const openSegments = segments.filter((s) => !s.closed);
+    const nodes = [];
+    const nodeIndex = /* @__PURE__ */ new Map();
+    function findOrCreateNode(x, y) {
+      const bx = Math.round(x / NODE_SNAP_TOLERANCE);
+      const by = Math.round(y / NODE_SNAP_TOLERANCE);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const ids = nodeIndex.get(bx + dx + "_" + (by + dy));
+          if (!ids) continue;
+          for (const id2 of ids) {
+            const n = nodes[id2];
+            if (Math.hypot(n.x - x, n.y - y) <= NODE_SNAP_TOLERANCE) return id2;
+          }
+        }
+      }
+      const id = nodes.length;
+      nodes.push({ id, x, y });
+      const key = bx + "_" + by;
+      if (!nodeIndex.has(key)) nodeIndex.set(key, []);
+      nodeIndex.get(key).push(id);
+      return id;
+    }
+    const edges = [];
+    for (const s of openSegments) {
+      const a = findOrCreateNode(s.x0, s.y0);
+      const b = findOrCreateNode(s.x1, s.y1);
+      if (a === b) continue;
+      const length = Math.hypot(nodes[b].x - nodes[a].x, nodes[b].y - nodes[a].y);
+      edges.push({ id: edges.length, a, b, strokeWidth: s.strokeWidth, dash: s.dash, length });
+    }
+    const adjacency = /* @__PURE__ */ new Map();
+    for (const e of edges) {
+      if (!adjacency.has(e.a)) adjacency.set(e.a, []);
+      if (!adjacency.has(e.b)) adjacency.set(e.b, []);
+      adjacency.get(e.a).push(e.id);
+      adjacency.get(e.b).push(e.id);
+    }
+    const keptIds = new Set(edges.map((e) => e.id));
+    for (const e of edges) {
+      if (e.length >= MIN_PIPE_SEGMENT_LEN) continue;
+      const degA = (adjacency.get(e.a) || []).length;
+      const degB = (adjacency.get(e.b) || []).length;
+      if (degA <= 1 && degB <= 1) keptIds.delete(e.id);
+    }
+    const finalEdges = edges.filter((e) => keptIds.has(e.id));
+    const finalAdjacency = /* @__PURE__ */ new Map();
+    for (const e of finalEdges) {
+      if (!finalAdjacency.has(e.a)) finalAdjacency.set(e.a, []);
+      if (!finalAdjacency.has(e.b)) finalAdjacency.set(e.b, []);
+      finalAdjacency.get(e.a).push(e.id);
+      finalAdjacency.get(e.b).push(e.id);
+    }
+    return { nodes, edges: finalEdges, adjacency: finalAdjacency, filledShapes };
+  }
+  function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq)) : 0;
+    const cx = ax + t * dx, cy = ay + t * dy;
+    return { dist: Math.hypot(px - cx, py - cy), t, x: cx, y: cy };
+  }
+  function anchorPointForTag(graph, tagBbox) {
+    const cx = (tagBbox.minX + tagBbox.maxX) / 2;
+    const cy = (tagBbox.minY + tagBbox.maxY) / 2;
+    const w = tagBbox.maxX - tagBbox.minX;
+    const h = tagBbox.maxY - tagBbox.minY;
+    const radius = Math.max(w, h, 1) * ANCHOR_RADIUS_FACTOR;
+    let best = null;
+    let bestScore = Infinity;
+    for (const e of graph.edges) {
+      const a = graph.nodes[e.a], b = graph.nodes[e.b];
+      const hit = pointToSegmentDistance(cx, cy, a.x, a.y, b.x, b.y);
+      if (hit.dist > radius) continue;
+      const below = hit.y > tagBbox.maxY ? 1 : 0;
+      const score = hit.dist - below * (h * 0.5);
+      if (score < bestScore) {
+        bestScore = score;
+        best = { edge: e, point: [hit.x, hit.y] };
+      }
+    }
+    return best;
+  }
+  function isNearFilledShape(graph, x, y, pad = 2) {
+    for (const box of graph.filledShapes) {
+      if (x >= box.minX - pad && x <= box.maxX + pad && y >= box.minY - pad && y <= box.maxY + pad) return true;
+    }
+    return false;
+  }
+  function simplifyCollinear(points) {
+    if (points.length <= 2) return points;
+    const out = [points[0]];
+    for (let i = 1; i < points.length - 1; i++) {
+      const [ax, ay] = out[out.length - 1];
+      const [bx, by] = points[i];
+      const [cx, cy] = points[i + 1];
+      const a1 = Math.atan2(by - ay, bx - ax);
+      const a2 = Math.atan2(cy - by, cx - bx);
+      let diff = Math.abs(a1 - a2);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
+      if (diff > COLLINEAR_ANGLE_TOL) out.push(points[i]);
+    }
+    out.push(points[points.length - 1]);
+    return out;
+  }
+  function traceFromAnchor(graph, anchor) {
+    if (!anchor) return null;
+    const { edge, point } = anchor;
+    function walk(startNodeId, cameFromEdgeId) {
+      const path = [];
+      let currentNode = startNodeId;
+      let prevEdge = cameFromEdgeId;
+      while (true) {
+        const n = graph.nodes[currentNode];
+        path.push([n.x, n.y]);
+        if (isNearFilledShape(graph, n.x, n.y)) break;
+        const forward = (graph.adjacency.get(currentNode) || []).filter((id) => id !== prevEdge);
+        if (forward.length !== 1) break;
+        const nextEdge = graph.edges[forward[0]];
+        currentNode = nextEdge.a === currentNode ? nextEdge.b : nextEdge.a;
+        prevEdge = forward[0];
+      }
+      return path;
+    }
+    const towardA = walk(edge.a, edge.id).reverse();
+    const towardB = walk(edge.b, edge.id);
+    const full = [...towardA, point, ...towardB];
+    return simplifyCollinear(full);
+  }
+
+  // src/app/autotrace.js
+  async function startAutoTrace(i) {
+    const res = S.lastResults[i];
+    if (!res || res.source !== "text") return;
+    await jumpToResult(i);
+    const page = await getPageProxy(res.page);
+    const data = S.pageData.get(res.page);
+    if (!data.vectorGraph) {
+      const { segments, filledShapes } = await extractVectorSegments(page);
+      data.vectorGraph = buildLineGraph(segments, filledShapes);
+    }
+    const pts = [];
+    for (const idx of res.itemIndices) pts.push(...itemQuadPdfSpace(data.textItems[idx]));
+    const tagBbox = boundsOfPoints(pts);
+    const anchor = anchorPointForTag(data.vectorGraph, tagBbox);
+    const tracedPdfPoints = anchor ? traceFromAnchor(data.vectorGraph, anchor) : null;
+    const viewport = page.getViewport({ scale: S.scale });
+    if (tracedPdfPoints && tracedPdfPoints.length >= 2) {
+      seedPolyline(tracedPdfPoints.map(([x, y]) => applyMatrix(viewport.transform, x, y)));
+    } else {
+      const cx = (tagBbox.minX + tagBbox.maxX) / 2;
+      const cy = (tagBbox.minY + tagBbox.maxY) / 2;
+      seedPolyline([applyMatrix(viewport.transform, cx, cy)]);
+    }
+  }
+
   // src/app/results.js
   function buildResultElement(res, i) {
     const el = document.createElement("div");
@@ -1924,6 +2476,20 @@
         openFixEditor(el, meta, res);
       });
       topRow.appendChild(fixBtn);
+    } else if (res.source === "text") {
+      const traceBtn = document.createElement("button");
+      traceBtn.className = "trace-btn";
+      traceBtn.textContent = "Mark up";
+      traceBtn.title = "Auto-trace the line associated with this tag";
+      traceBtn.hidden = true;
+      traceBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        startAutoTrace(i);
+      });
+      topRow.appendChild(traceBtn);
+      pageIsVector(res.page).then((isVector) => {
+        traceBtn.hidden = !isVector;
+      });
     }
     meta.appendChild(topRow);
     const textEl = document.createElement("div");
@@ -2117,250 +2683,6 @@
     const dx = (canvasEl.width - dw) / 2, dy = (canvasEl.height - dh) / 2;
     ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh);
   }
-
-  // src/app/markup.js
-  function syncMarkupModeUI() {
-    const active = S.mode === "markup";
-    pencilBtn.classList.toggle("active", active);
-    overlayCanvas.classList.toggle("markup-active", active);
-  }
-  function selectStroke(id) {
-    if (S.selectedMarkupId === id) return;
-    S.selectedMarkupId = id;
-    refreshOverlay();
-  }
-  function closeHintPopover() {
-    markupHintPopover.hidden = true;
-  }
-  function updateMarkupButtons() {
-    const strokes = S.markups.get(S.currentPage);
-    const hasOnPage = !!(strokes && strokes.length);
-    markupUndoBtn.disabled = !hasOnPage;
-    markupClearBtn.disabled = !hasOnPage;
-    let anyMarkups = false;
-    for (const arr of S.markups.values()) {
-      if (arr.length) {
-        anyMarkups = true;
-        break;
-      }
-    }
-    markupExportBtn.disabled = !anyMarkups;
-  }
-  async function refreshOverlay() {
-    await drawHighlights();
-    await drawMarkups();
-  }
-  function canvasPointFromEvent(e) {
-    const rect = overlayCanvas.getBoundingClientRect();
-    const scaleX = overlayCanvas.width / rect.width;
-    const scaleY = overlayCanvas.height / rect.height;
-    return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
-  }
-  function distToSegment(p, a, b) {
-    const dx = b[0] - a[0], dy = b[1] - a[1];
-    const lenSq = dx * dx + dy * dy;
-    const t = lenSq ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq)) : 0;
-    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
-  }
-  async function hitTestStroke(pt) {
-    const strokes = S.markups.get(S.currentPage);
-    if (!strokes || !strokes.length) return null;
-    const page = await getPageProxy(S.currentPage);
-    const viewport = page.getViewport({ scale: S.scale });
-    for (let i = strokes.length - 1; i >= 0; i--) {
-      const s = strokes[i];
-      const canvasPts = s.points.map(([x, y]) => applyMatrix(viewport.transform, x, y));
-      const tolerance = Math.max(6, s.width * S.scale / 2 + 4);
-      for (let j = 1; j < canvasPts.length; j++) {
-        if (distToSegment(pt, canvasPts[j - 1], canvasPts[j]) <= tolerance) return s;
-      }
-    }
-    return null;
-  }
-  function drawSegment(p0, p1) {
-    overlayCtx.strokeStyle = S.markupColor;
-    overlayCtx.lineWidth = Math.max(1, S.markupWidth * S.scale);
-    overlayCtx.globalAlpha = S.markupOpacity;
-    overlayCtx.lineJoin = "round";
-    overlayCtx.lineCap = "round";
-    overlayCtx.beginPath();
-    overlayCtx.moveTo(p0[0], p0[1]);
-    overlayCtx.lineTo(p1[0], p1[1]);
-    overlayCtx.stroke();
-    overlayCtx.globalAlpha = 1;
-  }
-  function drawPolyline(pts) {
-    for (let i = 1; i < pts.length; i++) drawSegment(pts[i - 1], pts[i]);
-  }
-  function commitStroke(tool, canvasPts) {
-    return (async () => {
-      const page = await getPageProxy(S.currentPage);
-      const viewport = page.getViewport({ scale: S.scale });
-      const pdfPoints = canvasPts.map(([x, y]) => pdfPointFromCanvas(viewport, x, y));
-      const stroke = {
-        id: "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-        tool,
-        color: S.markupColor,
-        width: S.markupWidth,
-        opacity: S.markupOpacity,
-        points: pdfPoints,
-        createdAt: Date.now()
-      };
-      if (!S.markups.has(S.currentPage)) S.markups.set(S.currentPage, []);
-      S.markups.get(S.currentPage).push(stroke);
-      await refreshOverlay();
-      updateMarkupButtons();
-    })();
-  }
-  pencilBtn.addEventListener("click", () => {
-    if (!S.pdfDoc) return;
-    S.mode = S.mode === "markup" ? "view" : "markup";
-    if (S.mode === "markup") selectStroke(null);
-    else cancelPolyline();
-    syncMarkupModeUI();
-  });
-  markupToolSelect.addEventListener("change", () => {
-    cancelPolyline();
-    selectStroke(null);
-    S.markupTool = markupToolSelect.value;
-    markupHintWrap.hidden = S.markupTool !== "polyline";
-    if (markupHintWrap.hidden) closeHintPopover();
-  });
-  markupHintBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    markupHintPopover.hidden = !markupHintPopover.hidden;
-  });
-  markupHintCloseBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    closeHintPopover();
-  });
-  document.addEventListener("click", (e) => {
-    if (!markupHintPopover.hidden && !markupHintWrap.contains(e.target)) closeHintPopover();
-  });
-  markupColorInput.addEventListener("input", () => {
-    S.markupColor = markupColorInput.value;
-  });
-  markupWidthInput.addEventListener("input", () => {
-    S.markupWidth = parseInt(markupWidthInput.value, 10) || 1;
-    markupWidthLabel.textContent = S.markupWidth + "px";
-  });
-  markupOpacityInput.addEventListener("input", () => {
-    S.markupOpacity = (parseInt(markupOpacityInput.value, 10) || 100) / 100;
-    markupOpacityLabel.textContent = Math.round(S.markupOpacity * 100) + "%";
-  });
-  var drawingActive = false;
-  var currentPoints = [];
-  overlayCanvas.addEventListener("mousedown", (e) => {
-    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool === "polyline") return;
-    e.preventDefault();
-    drawingActive = true;
-    currentPoints = [canvasPointFromEvent(e)];
-  });
-  window.addEventListener("mousemove", async (e) => {
-    if (!drawingActive) return;
-    const pt = canvasPointFromEvent(e);
-    if (S.markupTool === "line") {
-      currentPoints = [currentPoints[0], pt];
-      await refreshOverlay();
-      drawSegment(currentPoints[0], currentPoints[1]);
-    } else {
-      currentPoints.push(pt);
-      drawSegment(currentPoints[currentPoints.length - 2], pt);
-    }
-  });
-  window.addEventListener("mouseup", async () => {
-    if (!drawingActive) return;
-    drawingActive = false;
-    const pts = currentPoints;
-    currentPoints = [];
-    if (pts.length < 2) return;
-    await commitStroke(S.markupTool, pts);
-  });
-  var polylinePoints = [];
-  function polylineActive() {
-    return polylinePoints.length > 0;
-  }
-  function cancelPolyline() {
-    if (!polylineActive()) return;
-    polylinePoints = [];
-    refreshOverlay();
-  }
-  async function finishPolyline(pts) {
-    polylinePoints = [];
-    if (pts.length < 2) {
-      await refreshOverlay();
-      return;
-    }
-    await commitStroke("polyline", pts);
-  }
-  overlayCanvas.addEventListener("click", (e) => {
-    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline") return;
-    const pt = canvasPointFromEvent(e);
-    if (!polylineActive()) {
-      polylinePoints = [pt];
-      return;
-    }
-    drawSegment(polylinePoints[polylinePoints.length - 1], pt);
-    polylinePoints.push(pt);
-  });
-  overlayCanvas.addEventListener("dblclick", async (e) => {
-    if (S.mode !== "markup" || !S.pdfDoc || S.markupTool !== "polyline" || !polylineActive()) return;
-    e.preventDefault();
-    const pts = polylinePoints.slice(0, -1);
-    await finishPolyline(pts);
-  });
-  window.addEventListener("keydown", async (e) => {
-    if (S.mode !== "markup" || S.markupTool !== "polyline" || !polylineActive()) return;
-    if (e.key === "Enter") {
-      e.preventDefault();
-      await finishPolyline(polylinePoints);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      cancelPolyline();
-    }
-  });
-  window.addEventListener("mousemove", async (e) => {
-    if (S.mode !== "markup" || S.markupTool !== "polyline" || !polylineActive()) return;
-    const pt = canvasPointFromEvent(e);
-    await refreshOverlay();
-    drawPolyline([...polylinePoints, pt]);
-  });
-  async function deleteSelectedStroke() {
-    const strokes = S.markups.get(S.currentPage);
-    const idx = strokes ? strokes.findIndex((s) => s.id === S.selectedMarkupId) : -1;
-    if (idx === -1) return;
-    strokes.splice(idx, 1);
-    S.selectedMarkupId = null;
-    await refreshOverlay();
-    updateMarkupButtons();
-  }
-  window.addEventListener("keydown", async (e) => {
-    if (S.mode === "markup" || !S.selectedMarkupId) return;
-    const tag = document.activeElement && document.activeElement.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-    if (e.key === "Delete" || e.key === "Backspace") {
-      e.preventDefault();
-      await deleteSelectedStroke();
-    } else if (e.key === "Escape") {
-      selectStroke(null);
-    }
-  });
-  markupUndoBtn.addEventListener("click", async () => {
-    const strokes = S.markups.get(S.currentPage);
-    if (!strokes || !strokes.length) return;
-    const removed = strokes.pop();
-    if (S.selectedMarkupId === removed.id) S.selectedMarkupId = null;
-    await refreshOverlay();
-    updateMarkupButtons();
-  });
-  markupClearBtn.addEventListener("click", async () => {
-    const strokes = S.markups.get(S.currentPage);
-    if (!strokes || !strokes.length) return;
-    S.markups.set(S.currentPage, []);
-    S.selectedMarkupId = null;
-    await refreshOverlay();
-    updateMarkupButtons();
-  });
 
   // src/app/viewer.js
   async function renderPage(pageNum) {
@@ -2752,7 +3074,9 @@
           ocrLines: null,
           thumbCanvas: null,
           thumbScale: null,
-          rawLen: 0
+          rawLen: 0,
+          hasImage: void 0,
+          vectorGraph: null
         });
       }
       emptyViewer.style.display = "none";
@@ -2855,11 +3179,23 @@
       data.lineGroups = groupItemsIntoLines(items);
     }
     const hasImage = await pageHasImage(page);
+    data.hasImage = hasImage;
     const confidentTextLayer = rawLen > TEXT_LEN_THRESHOLD && !hasImage;
     if (confidentTextLayer) {
       data.status = "text-done";
     }
     return confidentTextLayer;
+  }
+  async function pageIsVector(pageNum) {
+    const data = S.pageData.get(pageNum);
+    if (!data) return false;
+    let hasImage = data.hasImage;
+    if (hasImage === void 0) {
+      const page = await getPageProxy(pageNum);
+      hasImage = await pageHasImage(page);
+      data.hasImage = hasImage;
+    }
+    return !hasImage;
   }
   function groupItemsIntoLines(items) {
     const enriched = items.map((it, idx) => {

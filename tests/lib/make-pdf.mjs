@@ -20,7 +20,15 @@ function circleOps({ x, y, r, width = 1 }) {
     `${x + k} ${y - r} ${x + r} ${y - k} ${x + r} ${y} c\nS`;
 }
 
-// pages: [[ {text, x, y, size?} | {circle: {x, y, r, width?}} | {image: {x, y, w, h}}, ... ], ...]
+// A stroked polyline — the vector "pipe" a page's operator list exposes for
+// the auto-trace feature (src/lib/vectorlines.js) to walk.
+function lineOps({ points, width = 2 }) {
+  const [first, ...rest] = points;
+  return `${width} w\n${first[0]} ${first[1]} m\n` +
+    rest.map(([x, y]) => `${x} ${y} l\n`).join('') + 'S';
+}
+
+// pages: [[ {text, x, y, size?} | {circle: {x, y, r, width?}} | {image: {x, y, w, h}} | {line: {points, width?}}, ... ], ...]
 //
 // The image is a single grey pixel stretched over a rectangle. It carries no
 // information — its job is to make the page look like a scan, because a page
@@ -40,6 +48,7 @@ export function makePdf(pages, { width = 612, height = 792 } = {}) {
   for (const items of pages) {
     const ops = items.map(it => {
       if (it.circle) return circleOps(it.circle);
+      if (it.line) return lineOps(it.line);
       if (it.image) return `q ${it.image.w} 0 0 ${it.image.h} ${it.image.x} ${it.image.y} cm /Im0 Do Q`;
       return `BT /F1 ${it.size || 12} Tf ${it.x} ${it.y} Td (${esc(it.text)}) Tj ET`;
     }).join('\n');

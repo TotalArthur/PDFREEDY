@@ -4,8 +4,10 @@ import { clamp, escapeHtml } from '../lib/text.js';
 import { itemQuadCanvas, boundsOfPoints } from '../lib/geometry.js';
 import { setCorrection } from './corrections.js';
 import { getPageProxy } from './pdf.js';
+import { pageIsVector } from './textlayer.js';
 import { runFullSearch } from './search.js';
 import { jumpToResult } from './viewer.js';
+import { startAutoTrace } from './autotrace.js';
 import {
   resultsList,
 } from './dom.js';
@@ -50,6 +52,21 @@ function buildResultElement(res, i) {
       openFixEditor(el, meta, res);
     });
     topRow.appendChild(fixBtn);
+  } else if (res.source === 'text') {
+    // Only offered on native vector pages, where the PDF's own line/pipe
+    // geometry is readable — checked async since it needs the operator
+    // list, so the button starts hidden and appears once that resolves.
+    const traceBtn = document.createElement('button');
+    traceBtn.className = 'trace-btn';
+    traceBtn.textContent = 'Mark up';
+    traceBtn.title = 'Auto-trace the line associated with this tag';
+    traceBtn.hidden = true;
+    traceBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      startAutoTrace(i);
+    });
+    topRow.appendChild(traceBtn);
+    pageIsVector(res.page).then(isVector => { traceBtn.hidden = !isVector; });
   }
   meta.appendChild(topRow);
 
