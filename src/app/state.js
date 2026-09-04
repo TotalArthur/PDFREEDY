@@ -26,6 +26,18 @@ const S = {
   // up once the matcher was allowed to absorb dropped characters. Those hits
   // are worth surfacing but not worth presenting as certainties.
   deepSearchUsed: false,
+
+  // Pencil markup tool.
+  mode: 'view',                // 'view' | 'markup'
+  markupTool: 'pen',           // 'pen' | 'line'
+  markupColor: '#ff3b30',
+  markupWidth: 3,               // PDF-space points (not canvas pixels)
+  markups: new Map(),          // pageNum -> Stroke[]
+  // Cloned copy of the loaded file's bytes, kept around because pdf.js can
+  // detach/transfer the ArrayBuffer it's handed. Needed at export time to
+  // load the original PDF into pdf-lib for burning in markups.
+  rawFileBytes: null,
+  fileName: '',
 };
 
 export { S };

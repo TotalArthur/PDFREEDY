@@ -9,6 +9,8 @@ import './pdf.js';
 import './queue.js';
 import './results.js';
 import './viewer.js';
+import './markup.js';
+import './export.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';

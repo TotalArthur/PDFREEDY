@@ -1,6 +1,7 @@
 import { S } from './state.js';
 import { renderPage } from './viewer.js';
 import { updateProcSummary, startBackgroundProcessing, hideViewerLoading } from './queue.js';
+import { syncMarkupModeUI, updateMarkupButtons } from './markup.js';
 import {
   fileInput,
   fileInfo,
@@ -75,6 +76,11 @@ async function loadPdf(file) {
   fileInfo.textContent = 'Loading ' + file.name + ' …';
   try {
     const arrayBuffer = await file.arrayBuffer();
+    // pdf.js can detach/transfer this buffer once handed off, so keep a
+    // separate copy around for the markup export step (pdf-lib needs the
+    // original bytes to load and re-save the PDF).
+    S.rawFileBytes = arrayBuffer.slice(0);
+    S.fileName = file.name;
     const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
     S.pdfDoc = await loadingTask.promise;
     S.numPages = S.pdfDoc.numPages;
@@ -115,6 +121,9 @@ function resetDocumentState() {
   S.pageProxyCache.clear(); S.pageData.clear();
   S.lastResults = []; S.activeResultIndex = -1;
   S.processingCancelled = true; S.isBackgroundRunning = false;
+  S.markups.clear(); S.mode = 'view'; S.rawFileBytes = null; S.fileName = '';
+  syncMarkupModeUI();
+  updateMarkupButtons();
   if (S.currentRenderTask) {
     try { S.currentRenderTask.cancel(); } catch (err) { /* already finished */ }
     S.currentRenderTask = null;
