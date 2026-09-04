@@ -131,7 +131,11 @@ async function search(tag, { exact = true, fuzzy = true } = {}) {
   return page.$$eval('#resultsList .result-item', els => els.map(e => ({
     text: e.querySelector('.result-text')?.textContent || '',
     badges: [...e.querySelectorAll('.badge')].map(b => b.textContent),
-    reasons: [...e.querySelectorAll('.result-why li')].map(li => li.textContent),
+    confPct: e.querySelector('.badge-conf')?.textContent || '',
+    // The per-row bullet explanation moved from visible text into the
+    // confidence pill's hover tooltip (title attribute) — still readable
+    // by a test without cluttering the row itself.
+    reasons: (e.querySelector('.badge-conf')?.title || '').split('\n').filter(Boolean),
   })));
 }
 const bandsShown = () => page.$$eval('#resultsList .band-head',

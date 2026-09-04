@@ -2,6 +2,7 @@ import { S } from './state.js';
 import { BANDS, BAND_LABEL, BAND_NOTE, bandOf } from '../lib/bands.js';
 import { clamp, escapeHtml } from '../lib/text.js';
 import { itemQuadCanvas, boundsOfPoints } from '../lib/geometry.js';
+import { confidencePercent } from '../lib/evidence.js';
 import { setCorrection } from './corrections.js';
 import { getPageProxy } from './pdf.js';
 import { pageIsVector } from './textlayer.js';
@@ -34,6 +35,14 @@ function buildResultElement(res, i) {
   const meta = document.createElement('div');
   meta.className = 'result-meta';
 
+  // A single percentage replaces the old per-row bullet list of reasons —
+  // one number a reader can scan across a whole result list at a glance,
+  // with the full explanation (still computed in evidence.js, still unit
+  // tested) available as a hover tooltip for anyone who wants to check it.
+  const pct = confidencePercent(res);
+  const pctTier = pct >= 90 ? 'high' : pct >= 70 ? 'med' : 'low';
+  const pctTitle = res.reasons && res.reasons.length ? res.reasons.join('\n') : '';
+
   const topRow = document.createElement('div');
   topRow.className = 'result-top-row';
   topRow.innerHTML =
@@ -41,7 +50,8 @@ function buildResultElement(res, i) {
     '<span class="badge ' + (res.source==='text' ? 'badge-text' : 'badge-ocr') + '">' + (res.source==='text'?'TEXT':'OCR') + '</span>' +
     (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) — check the crop">GLYPH</span>' : '') +
     (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : '') +
-    (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : '');
+    (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : '') +
+    '<span class="badge badge-conf badge-conf-' + pctTier + '" title="' + escapeHtml(pctTitle) + '">' + pct + '%</span>';
   if (res.source === 'ocr') {
     const fixBtn = document.createElement('button');
     fixBtn.className = 'fix-btn';
@@ -80,28 +90,6 @@ function buildResultElement(res, i) {
     rawEl.className = 'result-raw';
     rawEl.textContent = 'OCR read: ' + res.rawText;
     meta.appendChild(rawEl);
-  }
-
-  // Why this one. The tool can now tell a corroborated find from a coincidence
-  // — saying so out loud is what lets a reader check its reasoning instead of
-  // taking its word for it, which is the whole difference between three
-  // identical-looking guesses and an answer.
-  if (res.reasons && res.reasons.length) {
-    const why = document.createElement('ul');
-    why.className = 'result-why';
-    for (const line of res.reasons) {
-      const li = document.createElement('li');
-      li.textContent = line;
-      why.appendChild(li);
-    }
-    meta.appendChild(why);
-  }
-
-  if (res.source === 'ocr') {
-    const conf = document.createElement('div');
-    conf.className = 'result-conf';
-    conf.textContent = 'OCR was ' + Math.round(res.confidence) + '% sure of this read overall.';
-    meta.appendChild(conf);
   }
 
   el.appendChild(meta);
