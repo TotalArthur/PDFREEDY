@@ -261,34 +261,55 @@
 
   /* ---------- Viewer toolbar ---------- */
   #toolbar {
-    display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel);
+    display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--panel);
     border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap;
   }
   #toolbar button {
-    padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2);
+    padding: 6px 11px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2);
     color: var(--text); cursor: pointer; font-size: 13px;
+    transition: background .15s ease, border-color .15s ease, color .15s ease, transform .05s ease;
   }
-  #toolbar button:hover:not(:disabled) { background: #3a3d42; }
+  #toolbar button:hover:not(:disabled) { background: #3a3d42; border-color: #4a4e55; }
+  #toolbar button:active:not(:disabled) { transform: translateY(1px); }
   #toolbar button:disabled { opacity: .35; cursor: default; }
+  #toolbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   #pageNumInput {
     width: 48px; text-align: center; background: var(--panel-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 5px; padding: 5px;
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px;
   }
   #pageCountLabel { color: var(--text-dim); font-size: 13px; }
-  .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+  .toolbar-sep { width: 1px; height: 22px; background: var(--border); margin: 0 5px; flex-shrink: 0; }
   #zoomLabel { font-size: 12px; color: var(--text-dim); width: 46px; text-align: center; }
-  #pencilBtn.active { background: var(--accent); color: #08131f; border-color: var(--accent); }
-  #markupColorInput {
-    width: 28px; height: 28px; padding: 0; border-radius: 5px; border: 1px solid var(--border);
-    background: var(--panel-2); cursor: pointer;
+  #pencilBtn {
+    display: inline-flex; align-items: center; gap: 6px;
   }
-  #markupWidthInput { width: 70px; vertical-align: middle; }
-  #markupWidthLabel { font-size: 12px; color: var(--text-dim); width: 30px; text-align: center; display: inline-block; }
-  #markupOpacityInput { width: 70px; vertical-align: middle; }
-  #markupOpacityLabel { font-size: 12px; color: var(--text-dim); width: 34px; text-align: center; display: inline-block; }
+  #pencilBtn.active {
+    background: var(--accent); color: #08131f; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(79,157,255,.25);
+  }
+  /* The draw controls slide open beside the Pencil button instead of
+     snapping in/out, so toggling the tool reads as one continuous action. */
+  #markupDrawControls {
+    display: inline-flex; align-items: center; gap: 8px;
+    max-width: 640px; opacity: 1; overflow: hidden;
+    transition: max-width .22s ease, opacity .18s ease .02s, margin-left .22s ease;
+    margin-left: 2px;
+  }
+  #markupDrawControls.collapsed {
+    max-width: 0; opacity: 0; margin-left: 0; pointer-events: none;
+    transition: max-width .18s ease, opacity .12s ease, margin-left .18s ease;
+  }
+  #markupColorInput {
+    width: 28px; height: 28px; padding: 0; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); cursor: pointer; flex-shrink: 0;
+  }
+  #markupWidthInput { width: 70px; vertical-align: middle; flex-shrink: 0; }
+  #markupWidthLabel { font-size: 12px; color: var(--text-dim); width: 30px; text-align: center; display: inline-block; flex-shrink: 0; }
+  #markupOpacityInput { width: 70px; vertical-align: middle; flex-shrink: 0; }
+  #markupOpacityLabel { font-size: 12px; color: var(--text-dim); width: 34px; text-align: center; display: inline-block; flex-shrink: 0; }
   #markupToolSelect {
-    padding: 5px 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--panel-2);
-    color: var(--text); font-size: 13px;
+    padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--text); font-size: 13px; flex-shrink: 0;
   }
   .hint-wrap { position: relative; display: inline-flex; }
   .hint-wrap[hidden] { display: none; }
@@ -432,8 +453,8 @@
         <button id="fitWidthBtn">Fit width</button>
         <button id="zoomResetBtn">100%</button>
         <div class="toolbar-sep"></div>
-        <button id="pencilBtn" title="Draw markup on the drawing">&#9998; Pencil</button>
-        <span id="markupDrawControls" hidden>
+        <button id="pencilBtn" title="Draw markup on the drawing (P)">&#9998; Pencil</button>
+        <span id="markupDrawControls" class="collapsed">
           <select id="markupToolSelect" title="Markup shape">
             <option value="pen">Freehand</option>
             <option value="line">Straight line</option>
@@ -1915,7 +1936,7 @@
     const active = S.mode === "markup";
     pencilBtn.classList.toggle("active", active);
     overlayCanvas.classList.toggle("markup-active", active);
-    markupDrawControls.hidden = !active;
+    markupDrawControls.classList.toggle("collapsed", !active);
     if (!active) closeHintPopover();
   }
   function selectStroke(id) {
@@ -2006,12 +2027,21 @@
       updateMarkupButtons();
     })();
   }
-  pencilBtn.addEventListener("click", () => {
+  function togglePencilMode() {
     if (!S.pdfDoc) return;
     S.mode = S.mode === "markup" ? "view" : "markup";
     if (S.mode === "markup") selectStroke(null);
     else cancelPolyline();
     syncMarkupModeUI();
+  }
+  pencilBtn.addEventListener("click", togglePencilMode);
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "p" && e.key !== "P") return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    e.preventDefault();
+    togglePencilMode();
   });
   markupToolSelect.addEventListener("change", () => {
     cancelPolyline();
@@ -3049,20 +3079,27 @@
     }
   }, { passive: false });
   var dragging = false;
+  var dragButton = -1;
   var dragStartX = 0;
   var dragStartY = 0;
   var dragScrollX = 0;
   var dragScrollY = 0;
   canvasScroll.addEventListener("mousedown", async (e) => {
+    if (e.button !== 0 && e.button !== 1) return;
     if (e.target.closest(".result-item")) return;
     if (S.mode === "markup") return;
-    const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
-    if (hit) {
-      selectStroke(hit.id);
-      return;
+    if (e.button === 1) {
+      e.preventDefault();
+    } else {
+      const hit = S.pdfDoc ? await hitTestStroke(canvasPointFromEvent(e)) : null;
+      if (hit) {
+        selectStroke(hit.id);
+        return;
+      }
+      if (S.selectedMarkupId) selectStroke(null);
     }
-    if (S.selectedMarkupId) selectStroke(null);
     dragging = true;
+    dragButton = e.button;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     dragScrollX = canvasScroll.scrollLeft;
@@ -3074,8 +3111,10 @@
     canvasScroll.scrollLeft = dragScrollX - (e.clientX - dragStartX);
     canvasScroll.scrollTop = dragScrollY - (e.clientY - dragStartY);
   });
-  window.addEventListener("mouseup", () => {
+  window.addEventListener("mouseup", (e) => {
+    if (!dragging || e.button !== dragButton) return;
     dragging = false;
+    dragButton = -1;
     canvasScroll.style.cursor = "";
   });
 
