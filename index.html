@@ -2237,7 +2237,7 @@
     function flushSubpaths(stroke, fill) {
       for (const sp of subpaths) {
         if (sp.hasCurve) continue;
-        if (fill) filledShapes.push(boundsOfPoints(sp.points));
+        if (fill || stroke && sp.closed) filledShapes.push(boundsOfPoints(sp.points));
         if (stroke) {
           for (let j = 1; j < sp.points.length; j++) {
             const [x0, y0] = sp.points[j - 1];
@@ -2360,23 +2360,38 @@
     const cx = ax + t * dx, cy = ay + t * dy;
     return { dist: Math.hypot(px - cx, py - cy), t, x: cx, y: cy };
   }
+  function angleOffPipeGrid(ax, ay, bx, by) {
+    const angle = Math.atan2(by - ay, bx - ax);
+    const folded = (angle % (Math.PI / 2) + Math.PI / 2) % (Math.PI / 2);
+    const toAxis = Math.min(folded, Math.PI / 2 - folded);
+    const to45 = Math.abs(folded - Math.PI / 4);
+    return Math.min(toAxis, to45);
+  }
+  var ON_GRID_TOL = Math.PI / 12;
   function anchorPointForTag(graph, tagBbox) {
     const cx = (tagBbox.minX + tagBbox.maxX) / 2;
     const cy = (tagBbox.minY + tagBbox.maxY) / 2;
     const w = tagBbox.maxX - tagBbox.minX;
     const h = tagBbox.maxY - tagBbox.minY;
     const radius = Math.max(w, h, 1) * ANCHOR_RADIUS_FACTOR;
-    let best = null;
-    let bestScore = Infinity;
+    const candidates = [];
     for (const e of graph.edges) {
       const a = graph.nodes[e.a], b = graph.nodes[e.b];
       const hit = pointToSegmentDistance(cx, cy, a.x, a.y, b.x, b.y);
       if (hit.dist > radius) continue;
       const below = hit.y > tagBbox.maxY ? 1 : 0;
+      const onGrid = angleOffPipeGrid(a.x, a.y, b.x, b.y) <= ON_GRID_TOL;
       const score = hit.dist - below * (h * 0.5);
-      if (score < bestScore) {
-        bestScore = score;
-        best = { edge: e, point: [hit.x, hit.y] };
+      candidates.push({ edge: e, point: [hit.x, hit.y], score, onGrid });
+    }
+    if (!candidates.length) return null;
+    const onGridCandidates = candidates.filter((c) => c.onGrid);
+    const pool = onGridCandidates.length ? onGridCandidates : candidates;
+    let best = null, bestScore = Infinity;
+    for (const c of pool) {
+      if (c.score < bestScore) {
+        bestScore = c.score;
+        best = c;
       }
     }
     return best;

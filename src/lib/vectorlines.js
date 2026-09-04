@@ -108,7 +108,15 @@ function segmentsFromOperatorList(opList, OPS) {
   function flushSubpaths(stroke, fill) {
     for (const sp of subpaths) {
       if (sp.hasCurve) continue; // curves unsupported — drop the whole subpath
-      if (fill) filledShapes.push(boundsOfPoints(sp.points));
+      // A closed shape is a symbol (valve body, instrument bubble, junction
+      // box) whether or not it's filled — a lot of P&ID valve/instrument
+      // icons are drawn as outline-only (stroked, unfilled) bowties and
+      // triangles, not solid shapes. Either way it's a stop zone, not a pipe
+      // segment: only an actually-filled shape is excluded further down by
+      // buildLineGraph's closed-segment filter, so an unfilled closed
+      // outline still needs recording here or a trace would run straight
+      // through the symbol with nothing to stop it.
+      if (fill || (stroke && sp.closed)) filledShapes.push(boundsOfPoints(sp.points));
       if (stroke) {
         for (let j = 1; j < sp.points.length; j++) {
           const [x0, y0] = sp.points[j - 1];
@@ -248,11 +256,34 @@ function pointToSegmentDistance(px, py, ax, ay, bx, by) {
   return { dist: Math.hypot(px - cx, py - cy), t, x: cx, y: cy };
 }
 
+// How far an edge's direction sits from the nearest "pipe-like" angle (0°,
+// 45°, or 90°) — P&ID process lines are drawn on that grid essentially
+// always. A short diagonal leader/pointer stroke from a label to its
+// component is often the single closest vector to the label's own text
+// (that's its whole job), which would otherwise win anchoring over the
+// actual, slightly-farther pipe. Returns radians off the nearest grid angle,
+// in [0, PI/8].
+function angleOffPipeGrid(ax, ay, bx, by) {
+  const angle = Math.atan2(by - ay, bx - ax);
+  const folded = ((angle % (Math.PI / 2)) + Math.PI / 2) % (Math.PI / 2); // fold into [0, 90°)
+  const toAxis = Math.min(folded, Math.PI / 2 - folded); // distance to nearest 0°/90°
+  const to45 = Math.abs(folded - Math.PI / 4);           // distance to 45°
+  return Math.min(toAxis, to45);
+}
+const ON_GRID_TOL = Math.PI / 12; // 15° — how far off 0/45/90 an edge can be and still count as "pipe-like"
+
 // Finds the line on the page most likely to be "this tag's line": the
 // nearest edge within a radius scaled to the tag's own text size, with a
 // soft bonus for a line sitting below the label (the common P&ID convention
-// of a line number sitting directly above its line). Returns null if
-// nothing is close enough — callers should fall back to manual markup.
+// of a line number sitting directly above its line). Candidates running at
+// a "pipe-like" angle (on/near the 0°/45°/90° grid real process lines are
+// always drawn on) are strictly preferred over off-grid ones regardless of
+// which is nearer — a short diagonal leader/pointer stroke from a label to
+// its component is often the single closest vector to the label (that's its
+// whole job), and picking it over a real, slightly farther pipe was the
+// reported failure mode: a distance-only score can't be trusted to tell the
+// two apart, so this makes it a hard preference instead of a soft nudge.
+// Returns null if nothing is close enough — callers fall back to manual markup.
 function anchorPointForTag(graph, tagBbox) {
   const cx = (tagBbox.minX + tagBbox.maxX) / 2;
   const cy = (tagBbox.minY + tagBbox.maxY) / 2;
@@ -260,18 +291,24 @@ function anchorPointForTag(graph, tagBbox) {
   const h = tagBbox.maxY - tagBbox.minY;
   const radius = Math.max(w, h, 1) * ANCHOR_RADIUS_FACTOR;
 
-  let best = null;
-  let bestScore = Infinity;
+  const candidates = [];
   for (const e of graph.edges) {
     const a = graph.nodes[e.a], b = graph.nodes[e.b];
     const hit = pointToSegmentDistance(cx, cy, a.x, a.y, b.x, b.y);
     if (hit.dist > radius) continue;
     const below = hit.y > tagBbox.maxY ? 1 : 0;
+    const onGrid = angleOffPipeGrid(a.x, a.y, b.x, b.y) <= ON_GRID_TOL;
     const score = hit.dist - below * (h * 0.5);
-    if (score < bestScore) {
-      bestScore = score;
-      best = { edge: e, point: [hit.x, hit.y] };
-    }
+    candidates.push({ edge: e, point: [hit.x, hit.y], score, onGrid });
+  }
+  if (!candidates.length) return null;
+
+  const onGridCandidates = candidates.filter(c => c.onGrid);
+  const pool = onGridCandidates.length ? onGridCandidates : candidates;
+
+  let best = null, bestScore = Infinity;
+  for (const c of pool) {
+    if (c.score < bestScore) { bestScore = c.score; best = c; }
   }
   return best;
 }
@@ -342,4 +379,5 @@ export {
   anchorPointForTag,
   traceFromAnchor,
   simplifyCollinear,
+  angleOffPipeGrid,
 };

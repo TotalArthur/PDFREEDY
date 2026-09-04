@@ -21,14 +21,16 @@ function circleOps({ x, y, r, width = 1 }) {
 }
 
 // A stroked polyline — the vector "pipe" a page's operator list exposes for
-// the auto-trace feature (src/lib/vectorlines.js) to walk.
-function lineOps({ points, width = 2 }) {
+// the auto-trace feature (src/lib/vectorlines.js) to walk. `closed: true`
+// closes the path before stroking without filling it — the common P&ID
+// convention for a valve/instrument icon drawn as an outline-only shape.
+function lineOps({ points, width = 2, closed = false }) {
   const [first, ...rest] = points;
   return `${width} w\n${first[0]} ${first[1]} m\n` +
-    rest.map(([x, y]) => `${x} ${y} l\n`).join('') + 'S';
+    rest.map(([x, y]) => `${x} ${y} l\n`).join('') + (closed ? 'h\n' : '') + 'S';
 }
 
-// pages: [[ {text, x, y, size?} | {circle: {x, y, r, width?}} | {image: {x, y, w, h}} | {line: {points, width?}}, ... ], ...]
+// pages: [[ {text, x, y, size?} | {circle: {x, y, r, width?}} | {image: {x, y, w, h}} | {line: {points, width?, closed?}}, ... ], ...]
 //
 // The image is a single grey pixel stretched over a rectangle. It carries no
 // information — its job is to make the page look like a scan, because a page

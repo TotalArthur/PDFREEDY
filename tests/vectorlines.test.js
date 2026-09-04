@@ -13,6 +13,7 @@ import {
   anchorPointForTag,
   traceFromAnchor,
   simplifyCollinear,
+  angleOffPipeGrid,
 } from '../src/lib/vectorlines.js';
 
 let pass = 0, fail = 0;
@@ -263,6 +264,63 @@ section('tracing stops at a filled-shape "stop zone" (a symbol/arrow/connector)'
   const traced = traceFromAnchor(graph, anchor);
   check('trace reaches the endpoint that sits inside the symbol box',
     traced.some(([x, y]) => x === 100 && y === 0));
+}
+
+section('an unfilled (stroke-only) closed shape is still a stop zone');
+{
+  // A valve/instrument icon drawn as an outline-only triangle (stroked,
+  // closed, never filled) — the common P&ID convention. Extraction alone
+  // must record it as a stop zone even though nothing was ever filled.
+  const ol = opList(
+    path([OPS.moveTo, OPS.lineTo, OPS.lineTo], [95, -5, 105, -5, 100, 5]),
+    [OPS.closePath, []],
+    [OPS.stroke, []],
+  );
+  const { segments, filledShapes } = segmentsFromOperatorList(ol, OPS);
+  check('the outline itself is excluded from pipe segments (closed)', segments.every(s => s.closed));
+  check('an outline-only closed shape still yields a stop zone', filledShapes.length === 1);
+}
+
+section('a trace stops at an unfilled closed symbol instead of running through it');
+{
+  // The exact failure mode reported: a valve icon drawn outline-only sits at
+  // the far end of a straight pipe run. Without recording it as a stop zone,
+  // the trace has nothing to halt it and continues straight through.
+  const segments = [{ x0: 0, y0: 0, x1: 100, y1: 0, strokeWidth: 1, dash: null, closed: false }];
+  const filledShapes = [{ minX: 95, minY: -5, maxX: 105, maxY: 5 }]; // an unfilled valve outline, recorded as above
+  const graph = buildLineGraph(segments, filledShapes);
+  const tagBbox = { minX: 20, maxX: 40, minY: -20, maxY: -5 };
+  const anchor = anchorPointForTag(graph, tagBbox);
+  const traced = traceFromAnchor(graph, anchor);
+  check('trace stops right at the symbol, not past it',
+    traced[traced.length - 1][0] === 100 && traced[traced.length - 1][1] === 0, JSON.stringify(traced));
+}
+
+// ---------------------------------------------------------------------------
+section('Off-grid angle: telling a pipe run from a diagonal leader/pointer line');
+{
+  check('a perfectly horizontal edge is on-grid', angleOffPipeGrid(0, 0, 100, 0) < 1e-9);
+  check('a perfectly vertical edge is on-grid', angleOffPipeGrid(0, 0, 0, 100) < 1e-9);
+  check('a 45-degree edge is on-grid', angleOffPipeGrid(0, 0, 100, 100) < 1e-9);
+  check('a 22.5-degree edge is the worst case (off-grid)',
+    Math.abs(angleOffPipeGrid(0, 0, 100, Math.tan(Math.PI / 8) * 100) - Math.PI / 8) < 1e-6);
+}
+
+section('anchoring prefers a farther axis-aligned pipe over a closer diagonal leader line');
+{
+  // A short diagonal leader stroke sits right against the label (as leader
+  // lines do, by design) at distance ~7; the real pipe is horizontal,
+  // further away at distance ~40. Anchoring by raw distance alone would
+  // wrongly pick the leader — this is the reported bug.
+  const segments = [
+    { x0: 100, y0: -7, x1: 110, y1: -37, strokeWidth: 1, dash: null, closed: false }, // diagonal leader (~18° off-grid), close
+    { x0: 0, y0: -50, x1: 300, y1: -50, strokeWidth: 1, dash: null, closed: false },  // horizontal pipe, farther
+  ];
+  const graph = buildLineGraph(segments, []);
+  const tagBbox = { minX: 90, maxX: 130, minY: 0, maxY: 12 };
+  const anchor = anchorPointForTag(graph, tagBbox);
+  check('anchors to the horizontal pipe, not the closer diagonal leader',
+    Math.abs(anchor.point[1] - (-50)) < 1e-6, JSON.stringify(anchor));
 }
 
 // ---------------------------------------------------------------------------
