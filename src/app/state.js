@@ -30,9 +30,9 @@ const S = {
   // Pencil markup tool.
   mode: 'view',                // 'view' | 'markup'
   markupTool: 'pen',           // 'pen' | 'line' | 'polyline'
-  markupColor: '#ff3b30',
+  markupColor: '#52c67a',
   markupWidth: 3,               // PDF-space points (not canvas pixels)
-  markupOpacity: 1,             // 0..1
+  markupOpacity: 0.45,          // 0..1
   markups: new Map(),          // pageNum -> Stroke[]
   selectedMarkupId: null,       // id of the stroke selected for deletion, on S.currentPage
   // Cloned copy of the loaded file's bytes, kept around because pdf.js can

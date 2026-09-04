@@ -33,6 +33,7 @@ const zoomLabel = $('zoomLabel');
 const fitWidthBtn = $('fitWidthBtn');
 const zoomResetBtn = $('zoomResetBtn');
 const pencilBtn = $('pencilBtn');
+const markupDrawControls = $('markupDrawControls');
 const markupToolSelect = $('markupToolSelect');
 const markupHintWrap = $('markupHintWrap');
 const markupHintBtn = $('markupHintBtn');
@@ -90,6 +91,7 @@ export {
   fitWidthBtn,
   zoomResetBtn,
   pencilBtn,
+  markupDrawControls,
   markupToolSelect,
   markupHintWrap,
   markupHintBtn,

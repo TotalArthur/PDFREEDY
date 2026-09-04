@@ -4,6 +4,7 @@ import { getPageProxy } from './pdf.js';
 import { drawHighlights, drawMarkups } from './viewer.js';
 import {
   pencilBtn,
+  markupDrawControls,
   markupToolSelect,
   markupHintWrap,
   markupHintBtn,
@@ -24,16 +25,27 @@ import {
 // =======================================================================
 // Markup ("pencil") tool: draw, store, undo/clear per page.
 //
-// Strokes are drawn live in canvas-space for zero-latency feedback, then
-// converted to PDF-space (via pdfPointFromCanvas) and stored on commit —
-// see drawMarkups() in viewer.js for the reverse projection used to redraw
-// them at whatever zoom/page is current.
+// A drag-drawn stroke (pen/line) is drawn live in canvas-space for
+// zero-latency feedback, then converted to PDF-space (via
+// pdfPointFromCanvas) and stored on commit. A point-to-point polyline is
+// long-lived by comparison — built up over several separate clicks, maybe
+// with a zoom in between — so it's kept in PDF-space the whole time it's in
+// progress and only projected to canvas-space for drawing (see
+// redrawActivePolyline()). Either way, see drawMarkups() in viewer.js for
+// the reverse projection used to redraw a committed stroke at whatever
+// zoom/page is current.
 // =======================================================================
 
 function syncMarkupModeUI() {
   const active = S.mode === 'markup';
   pencilBtn.classList.toggle('active', active);
   overlayCanvas.classList.toggle('markup-active', active);
+  // The tool/color/width/opacity controls are only meaningful while
+  // actually drawing — keeping them visible the rest of the time was clutter
+  // with nothing to select. Undo/Clear/Export stay put: those apply to
+  // markups already on the page, useful whether or not the pencil is active.
+  markupDrawControls.hidden = !active;
+  if (!active) closeHintPopover();
 }
 
 function selectStroke(id) {
@@ -211,7 +223,14 @@ window.addEventListener('mouseup', async () => {
 // or Enter finishes the line; Escape discards it. A double-click fires two
 // ordinary click events first, so the finishing handler below drops the
 // trailing duplicate point before committing.
-let polylinePoints = []; // canvas-space, while a polyline is in progress
+//
+// Points are kept in PDF-space (not canvas-space) for the whole time a
+// polyline is in progress — the same representation a committed Stroke
+// uses — precisely so it can be reprojected through whatever viewport is
+// current and stay pinned to the drawing if the user zooms or changes page
+// mid-polyline, instead of the preview drifting off to nowhere. See
+// redrawActivePolyline(), called from viewer.js's renderPage().
+let polylinePoints = []; // PDF-space, while a polyline is in progress
 
 function polylineActive() {
   return polylinePoints.length > 0;
@@ -223,37 +242,52 @@ function cancelPolyline() {
   refreshOverlay();
 }
 
-async function finishPolyline(pts) {
-  polylinePoints = [];
-  if (pts.length < 2) { await refreshOverlay(); return; }
-  await commitStroke('polyline', pts);
+async function currentViewport() {
+  const page = await getPageProxy(S.currentPage);
+  return page.getViewport({ scale: S.scale });
 }
 
-// Pre-fills the in-progress polyline (canvas-space points) from an
-// auto-trace and drops the user into the same click-to-extend/Enter-to-
-// commit flow as a manually-drawn one — see autotrace.js. Nothing is
-// written to S.markups until the user finishes it themselves, so a wrong or
-// incomplete auto-trace is always reviewed, never committed blind.
-function seedPolyline(canvasPts) {
+// Redraws the in-progress polyline (if any) reprojected through whatever
+// viewport is current — called after every render so a zoom/page-size
+// change doesn't leave the preview pointing at stale canvas coordinates.
+async function redrawActivePolyline() {
+  if (!polylineActive()) return;
+  const viewport = await currentViewport();
+  drawPolyline(polylinePoints.map(([x, y]) => applyMatrix(viewport.transform, x, y)));
+}
+
+async function finishPolyline(pdfPts) {
+  polylinePoints = [];
+  if (pdfPts.length < 2) { await refreshOverlay(); return; }
+  const viewport = await currentViewport();
+  const canvasPts = pdfPts.map(([x, y]) => applyMatrix(viewport.transform, x, y));
+  await commitStroke('polyline', canvasPts);
+}
+
+// Pre-fills the in-progress polyline (PDF-space points) from an auto-trace
+// and drops the user into the same click-to-extend/Enter-to-commit flow as
+// a manually-drawn one — see autotrace.js. Nothing is written to S.markups
+// until the user finishes it themselves, so a wrong or incomplete
+// auto-trace is always reviewed, never committed blind.
+async function seedPolyline(pdfPts) {
   cancelPolyline();
   S.mode = 'markup';
   S.markupTool = 'polyline';
   markupToolSelect.value = 'polyline';
   syncMarkupModeUI();
   markupHintWrap.hidden = false;
-  polylinePoints = canvasPts.slice();
-  refreshOverlay().then(() => drawPolyline(polylinePoints));
+  polylinePoints = pdfPts.slice();
+  await refreshOverlay();
+  await redrawActivePolyline();
 }
 
-overlayCanvas.addEventListener('click', (e) => {
+overlayCanvas.addEventListener('click', async (e) => {
   if (S.mode !== 'markup' || !S.pdfDoc || S.markupTool !== 'polyline') return;
-  const pt = canvasPointFromEvent(e);
-  if (!polylineActive()) {
-    polylinePoints = [pt];
-    return;
-  }
-  drawSegment(polylinePoints[polylinePoints.length - 1], pt);
-  polylinePoints.push(pt);
+  const viewport = await currentViewport();
+  const pdfPt = pdfPointFromCanvas(viewport, ...canvasPointFromEvent(e));
+  polylinePoints.push(pdfPt);
+  await refreshOverlay();
+  await redrawActivePolyline();
 });
 
 overlayCanvas.addEventListener('dblclick', async (e) => {
@@ -277,9 +311,11 @@ window.addEventListener('keydown', async (e) => {
 
 window.addEventListener('mousemove', async (e) => {
   if (S.mode !== 'markup' || S.markupTool !== 'polyline' || !polylineActive()) return;
-  const pt = canvasPointFromEvent(e);
+  const pt = canvasPointFromEvent(e); // the live cursor point is canvas-space already
+  const viewport = await currentViewport();
+  const canvasPolyline = polylinePoints.map(([x, y]) => applyMatrix(viewport.transform, x, y));
   await refreshOverlay();
-  drawPolyline([...polylinePoints, pt]);
+  drawPolyline([...canvasPolyline, pt]);
 });
 
 // ---- select-to-delete: click a drawn line (above), then Delete/Backspace ----
@@ -337,4 +373,5 @@ export {
   hitTestStroke,
   selectStroke,
   seedPolyline,
+  redrawActivePolyline,
 };

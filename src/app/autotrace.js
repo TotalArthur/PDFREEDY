@@ -2,7 +2,7 @@ import { S } from './state.js';
 import { getPageProxy } from './pdf.js';
 import { jumpToResult } from './viewer.js';
 import { seedPolyline } from './markup.js';
-import { itemQuadPdfSpace, boundsOfPoints, applyMatrix } from '../lib/geometry.js';
+import { itemQuadPdfSpace, boundsOfPoints } from '../lib/geometry.js';
 import {
   extractVectorSegments, excludeTextGlyphSegments, buildLineGraph, anchorPointForTag, traceFromAnchor,
 } from '../lib/vectorlines.js';
@@ -51,7 +51,6 @@ async function startAutoTrace(i) {
   if (!res || res.source !== 'text') return;
   await jumpToResult(i);
 
-  const page = await getPageProxy(res.page);
   const data = S.pageData.get(res.page);
   const graph = await getPageLineGraph(res.page);
 
@@ -62,15 +61,18 @@ async function startAutoTrace(i) {
   const anchor = anchorPointForTag(graph, tagBbox);
   const tracedPdfPoints = anchor ? traceFromAnchor(graph, anchor) : null;
 
-  const viewport = page.getViewport({ scale: S.scale });
+  // seedPolyline() takes PDF-space points (same representation as a
+  // committed Stroke) and reprojects through whatever viewport is current
+  // each time it redraws — so the seeded preview stays pinned to the
+  // drawing even if the user zooms before reviewing/committing it.
   if (tracedPdfPoints && tracedPdfPoints.length >= 2) {
-    seedPolyline(tracedPdfPoints.map(([x, y]) => applyMatrix(viewport.transform, x, y)));
+    await seedPolyline(tracedPdfPoints);
   } else {
     // No nearby line found on the page's vector geometry — start the
     // manual polyline right at the tag so the user can draw it by hand.
     const cx = (tagBbox.minX + tagBbox.maxX) / 2;
     const cy = (tagBbox.minY + tagBbox.maxY) / 2;
-    seedPolyline([applyMatrix(viewport.transform, cx, cy)]);
+    await seedPolyline([[cx, cy]]);
   }
 }
 

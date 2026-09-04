@@ -433,23 +433,25 @@
         <button id="zoomResetBtn">100%</button>
         <div class="toolbar-sep"></div>
         <button id="pencilBtn" title="Draw markup on the drawing">&#9998; Pencil</button>
-        <select id="markupToolSelect" title="Markup shape">
-          <option value="pen">Freehand</option>
-          <option value="line">Straight line</option>
-          <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
-        </select>
-        <span class="hint-wrap" hidden id="markupHintWrap">
-          <button id="markupHintBtn" class="icon-btn" title="How point to point works" aria-label="How point to point works">&#9432;</button>
-          <div id="markupHintPopover" class="hint-popover" hidden role="tooltip">
-            <button id="markupHintCloseBtn" class="hint-close" aria-label="Close">&times;</button>
-            Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel
-          </div>
+        <span id="markupDrawControls" hidden>
+          <select id="markupToolSelect" title="Markup shape">
+            <option value="pen">Freehand</option>
+            <option value="line">Straight line</option>
+            <option value="polyline" title="Click to add points, double-click or Enter to finish, Esc to cancel">Point to point</option>
+          </select>
+          <span class="hint-wrap" hidden id="markupHintWrap">
+            <button id="markupHintBtn" class="icon-btn" title="How point to point works" aria-label="How point to point works">&#9432;</button>
+            <div id="markupHintPopover" class="hint-popover" hidden role="tooltip">
+              <button id="markupHintCloseBtn" class="hint-close" aria-label="Close">&times;</button>
+              Click to add points &middot; double-click or Enter to finish &middot; Esc to cancel
+            </div>
+          </span>
+          <input type="color" id="markupColorInput" value="#52c67a" title="Markup color">
+          <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
+          <span id="markupWidthLabel">3px</span>
+          <input type="range" id="markupOpacityInput" min="10" max="100" step="5" value="45" title="Markup opacity">
+          <span id="markupOpacityLabel">45%</span>
         </span>
-        <input type="color" id="markupColorInput" value="#ff3b30" title="Markup color">
-        <input type="range" id="markupWidthInput" min="1" max="12" step="1" value="3" title="Line width">
-        <span id="markupWidthLabel">3px</span>
-        <input type="range" id="markupOpacityInput" min="10" max="100" step="5" value="100" title="Markup opacity">
-        <span id="markupOpacityLabel">100%</span>
         <button id="markupUndoBtn" title="Undo last stroke on this page" disabled>Undo</button>
         <button id="markupClearBtn" title="Clear all markups on this page" disabled>Clear page</button>
         <button id="markupExportBtn" title="Export a PDF with markups burned in" disabled>Export PDF</button>

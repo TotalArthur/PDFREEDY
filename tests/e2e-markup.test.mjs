@@ -119,12 +119,20 @@ check('no script errors after load', errors.length === 0, errors.join(' | '));
   await page.waitForTimeout(200);
 }
 
+// ---- markup tool/color/width/opacity controls only show while actually
+// drawing — nothing to select the rest of the time ----
+check('markup draw controls (tool/color/width/opacity) start hidden', await page.isHidden('#markupDrawControls'));
+check('default markup opacity is 45%', (await page.inputValue('#markupOpacityInput')) === '45');
+check('default markup opacity label reads 45%', (await page.textContent('#markupOpacityLabel')) === '45%');
+check('default markup color is green', (await page.inputValue('#markupColorInput')).toLowerCase() === '#52c67a');
+
 // ---- enter markup mode and draw a straight line ----
 check('export button starts disabled (no markups yet)', await page.isDisabled('#markupExportBtn'));
 await page.click('#pencilBtn');
 check('pencil button becomes active', await page.evaluate(() => document.querySelector('#pencilBtn').classList.contains('active')));
 check('overlay canvas gets pointer-events via markup-active class',
   await page.evaluate(() => document.querySelector('#overlayCanvas').classList.contains('markup-active')));
+check('markup draw controls appear once the pencil is active', await page.isVisible('#markupDrawControls'));
 
 await page.selectOption('#markupToolSelect', 'line');
 await page.evaluate(() => { document.querySelector('#markupColorInput').value = '#00ff00'; document.querySelector('#markupColorInput').dispatchEvent(new Event('input')); });
@@ -268,6 +276,69 @@ let abMidpoint, bcMidpoint;
     alphaAfterCancel === 0, String(alphaAfterCancel));
 }
 
+// ---- zooming mid-polyline must not leave the preview drawn at stale canvas
+// pixels from before the zoom: an in-progress point-to-point line is kept
+// in PDF-space and reprojected on every render, so it should stay visually
+// pinned to the same spot on the drawing regardless of scale ----
+{
+  // Kept within the default viewport height so the click actually lands on
+  // the canvas rather than past the edge of the visible window.
+  const pA = { x: freshBox.x + 120, y: freshBox.y + 225 };
+  const pB = { x: freshBox.x + 260, y: freshBox.y + 225 };
+  const midX = (pA.x + pB.x) / 2 - freshBox.x, midY = pA.y - freshBox.y;
+  // Confirm this spot has no pre-existing ink from an earlier stroke — a
+  // coincidental overlap would let this check pass for the wrong reason
+  // (the older committed stroke, drawn through the unaffected
+  // commitStroke()/drawMarkups() path, would show up there regardless of
+  // whether the in-progress-polyline fix works).
+  check('the zoom-drift check starts on empty ground', (await alphaAt(midX, midY)) === 0);
+
+  await page.mouse.click(pA.x, pA.y);
+  await page.mouse.click(pB.x, pB.y);
+  await page.waitForTimeout(100);
+
+  // Ground truth, computed independently of the app's own drawing code: what
+  // PDF-space points did those two clicks land on (at the scale/page current
+  // at the time), and where should that project to on the canvas at the new
+  // scale after zooming in.
+  const oldScale = await page.evaluate(() => window.__pdfreedyState.scale);
+  const pdfPts = await page.evaluate(async ({ ax, ay, bx, by, scale }) => {
+    const { pdfPointFromCanvas } = await import('/src/lib/geometry.js');
+    const state = window.__pdfreedyState;
+    const p = await state.pdfDoc.getPage(state.currentPage);
+    const vp = p.getViewport({ scale });
+    return [pdfPointFromCanvas(vp, ax, ay), pdfPointFromCanvas(vp, bx, by)];
+  }, { ax: pA.x - freshBox.x, ay: pA.y - freshBox.y, bx: pB.x - freshBox.x, by: pB.y - freshBox.y, scale: oldScale });
+
+  await page.click('#zoomInBtn');
+  await page.click('#zoomInBtn');
+  await page.waitForTimeout(300);
+
+  const newScale = await page.evaluate(() => window.__pdfreedyState.scale);
+  const [aAfter, bAfter] = await page.evaluate(async ({ pdfPts, scale }) => {
+    const { applyMatrix } = await import('/src/lib/geometry.js');
+    const state = window.__pdfreedyState;
+    const p = await state.pdfDoc.getPage(state.currentPage);
+    const vp = p.getViewport({ scale });
+    return pdfPts.map(([x, y]) => applyMatrix(vp.transform, x, y));
+  }, { pdfPts, scale: newScale });
+
+  const midAfter = { x: (aAfter[0] + bAfter[0]) / 2, y: (aAfter[1] + bAfter[1]) / 2 };
+  const alphaAtExpectedSpot = await alphaAt(midAfter.x, midAfter.y);
+  check('an in-progress point-to-point line stays pinned to the drawing after zooming in',
+    alphaAtExpectedSpot > 0, `alpha=${alphaAtExpectedSpot}`);
+
+  // Restore the exact prior scale (equal zoom-in/zoom-out counts) so the
+  // pixel math the rest of this test relies on (freshBox, bcMidpoint, ...)
+  // stays valid — deliberately not zoomResetBtn, which jumps to a fixed
+  // baseline rather than undoing these two steps.
+  await page.click('#zoomOutBtn');
+  await page.click('#zoomOutBtn');
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Escape'); // clean up the in-progress polyline before the rest of the test continues
+  await page.waitForTimeout(150);
+}
+
 // ---- selection only happens outside pencil mode: clicking a line while the
 // pencil is still active must NOT select it (it should behave as a normal
 // click for the active tool instead) ----
@@ -285,6 +356,7 @@ let abMidpoint, bcMidpoint;
 // ---- exit markup mode, confirm panning works again ----
 await page.click('#pencilBtn');
 check('pencil button deactivates', !(await page.evaluate(() => document.querySelector('#pencilBtn').classList.contains('active'))));
+check('markup draw controls hide again once the pencil is off', await page.isHidden('#markupDrawControls'));
 
 // ---- select a drawn line by clicking it (pencil off), then delete it with
 // Backspace ----
