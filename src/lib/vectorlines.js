@@ -282,8 +282,12 @@ const ON_GRID_TOL = Math.PI / 12; // 15° — how far off 0/45/90 an edge can be
 // its component is often the single closest vector to the label (that's its
 // whole job), and picking it over a real, slightly farther pipe was the
 // reported failure mode: a distance-only score can't be trusted to tell the
-// two apart, so this makes it a hard preference instead of a soft nudge.
-// Returns null if nothing is close enough — callers fall back to manual markup.
+// two apart. Off-grid edges are never even considered — not just
+// deprioritized — because anchoring onto one is never correct (a real pipe
+// run is on-grid by definition), so it's better to report no line found at
+// all than to seed a trace starting from a leader/witness/dimension line.
+// Returns null if nothing suitable is close enough — callers fall back to
+// manual markup.
 function anchorPointForTag(graph, tagBbox) {
   const cx = (tagBbox.minX + tagBbox.maxX) / 2;
   const cy = (tagBbox.minY + tagBbox.maxY) / 2;
@@ -291,20 +295,17 @@ function anchorPointForTag(graph, tagBbox) {
   const h = tagBbox.maxY - tagBbox.minY;
   const radius = Math.max(w, h, 1) * ANCHOR_RADIUS_FACTOR;
 
-  const candidates = [];
+  const pool = [];
   for (const e of graph.edges) {
     const a = graph.nodes[e.a], b = graph.nodes[e.b];
+    if (angleOffPipeGrid(a.x, a.y, b.x, b.y) > ON_GRID_TOL) continue;
     const hit = pointToSegmentDistance(cx, cy, a.x, a.y, b.x, b.y);
     if (hit.dist > radius) continue;
     const below = hit.y > tagBbox.maxY ? 1 : 0;
-    const onGrid = angleOffPipeGrid(a.x, a.y, b.x, b.y) <= ON_GRID_TOL;
     const score = hit.dist - below * (h * 0.5);
-    candidates.push({ edge: e, point: [hit.x, hit.y], score, onGrid });
+    pool.push({ edge: e, point: [hit.x, hit.y], score });
   }
-  if (!candidates.length) return null;
-
-  const onGridCandidates = candidates.filter(c => c.onGrid);
-  const pool = onGridCandidates.length ? onGridCandidates : candidates;
+  if (!pool.length) return null;
 
   let best = null, bestScore = Infinity;
   for (const c of pool) {
@@ -341,10 +342,20 @@ function simplifyCollinear(points) {
 
 // Walks outward from an anchor point (which may sit mid-edge) in both
 // directions until each hits a natural stop: a symbol/arrow/off-page
-// connector (a filled-shape "stop zone"), a dead end, or a branch/junction —
-// branches are never guessed through, matching the confirmed behavior of
-// handing an ambiguous continuation back to the user rather than risking a
-// silently wrong highlight on an engineering drawing.
+// connector (a filled-shape "stop zone"), a dead end, a branch/junction, or
+// an edge that isn't drawn like a pipe. Branches are never guessed through,
+// matching the confirmed behavior of handing an ambiguous continuation back
+// to the user rather than risking a silently wrong highlight.
+//
+// The off-grid check matters even though anchorPointForTag() already
+// prefers an on-grid starting edge: a node the walk passes through can have
+// exactly one edge in front of it (a normal "pass-through corner" by every
+// other signal — not a branch, not a stop zone) that is in fact something
+// else entirely touching the pipe at that exact point — a witness/leader
+// line anchored right on the centerline, or other non-pipe geometry a real
+// CAD export can carry. Without this, one such stray edge silently redirects
+// the whole rest of the trace onto itself. So every step the walk is about
+// to take, not just the first one, has to look like a pipe.
 function traceFromAnchor(graph, anchor) {
   if (!anchor) return null;
   const { edge, point } = anchor;
@@ -360,6 +371,8 @@ function traceFromAnchor(graph, anchor) {
       const forward = (graph.adjacency.get(currentNode) || []).filter(id => id !== prevEdge);
       if (forward.length !== 1) break; // dead end (0) or branch (>=2) — stop, don't guess
       const nextEdge = graph.edges[forward[0]];
+      const na = graph.nodes[nextEdge.a], nb = graph.nodes[nextEdge.b];
+      if (angleOffPipeGrid(na.x, na.y, nb.x, nb.y) > ON_GRID_TOL) break; // not pipe-like — stop rather than follow it
       currentNode = nextEdge.a === currentNode ? nextEdge.b : nextEdge.a;
       prevEdge = forward[0];
     }

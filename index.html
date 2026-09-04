@@ -2374,19 +2374,17 @@
     const w = tagBbox.maxX - tagBbox.minX;
     const h = tagBbox.maxY - tagBbox.minY;
     const radius = Math.max(w, h, 1) * ANCHOR_RADIUS_FACTOR;
-    const candidates = [];
+    const pool = [];
     for (const e of graph.edges) {
       const a = graph.nodes[e.a], b = graph.nodes[e.b];
+      if (angleOffPipeGrid(a.x, a.y, b.x, b.y) > ON_GRID_TOL) continue;
       const hit = pointToSegmentDistance(cx, cy, a.x, a.y, b.x, b.y);
       if (hit.dist > radius) continue;
       const below = hit.y > tagBbox.maxY ? 1 : 0;
-      const onGrid = angleOffPipeGrid(a.x, a.y, b.x, b.y) <= ON_GRID_TOL;
       const score = hit.dist - below * (h * 0.5);
-      candidates.push({ edge: e, point: [hit.x, hit.y], score, onGrid });
+      pool.push({ edge: e, point: [hit.x, hit.y], score });
     }
-    if (!candidates.length) return null;
-    const onGridCandidates = candidates.filter((c) => c.onGrid);
-    const pool = onGridCandidates.length ? onGridCandidates : candidates;
+    if (!pool.length) return null;
     let best = null, bestScore = Infinity;
     for (const c of pool) {
       if (c.score < bestScore) {
@@ -2432,6 +2430,8 @@
         const forward = (graph.adjacency.get(currentNode) || []).filter((id) => id !== prevEdge);
         if (forward.length !== 1) break;
         const nextEdge = graph.edges[forward[0]];
+        const na = graph.nodes[nextEdge.a], nb = graph.nodes[nextEdge.b];
+        if (angleOffPipeGrid(na.x, na.y, nb.x, nb.y) > ON_GRID_TOL) break;
         currentNode = nextEdge.a === currentNode ? nextEdge.b : nextEdge.a;
         prevEdge = forward[0];
       }

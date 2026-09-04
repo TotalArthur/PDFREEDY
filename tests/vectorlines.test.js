@@ -323,6 +323,40 @@ section('anchoring prefers a farther axis-aligned pipe over a closer diagonal le
     Math.abs(anchor.point[1] - (-50)) < 1e-6, JSON.stringify(anchor));
 }
 
+section('no on-grid line nearby at all: anchoring refuses the diagonal rather than using it');
+{
+  // Only a diagonal is in range — no real pipe anywhere close. Anchoring
+  // onto it anyway would seed a trace starting from something that is
+  // never actually a pipe, so this must report "nothing found" instead.
+  const segments = [
+    { x0: 100, y0: -7, x1: 110, y1: -37, strokeWidth: 1, dash: null, closed: false }, // diagonal leader, off-grid
+  ];
+  const graph = buildLineGraph(segments, []);
+  const tagBbox = { minX: 90, maxX: 130, minY: 0, maxY: 12 };
+  check('returns null rather than anchoring to the only (off-grid) candidate',
+    anchorPointForTag(graph, tagBbox) === null);
+}
+
+section('walk refuses to continue onto an off-grid edge, even mid-trace');
+{
+  // A real pipe corner at (100,0), degree 2 by every other signal (not a
+  // branch, not a stop zone) — but the "other" edge there is a stray
+  // diagonal (a witness/leader line anchored exactly on the centerline,
+  // say), not a further pipe segment. The walk must stop at that corner
+  // rather than silently continuing onto the diagonal.
+  const segments = [
+    { x0: 0, y0: 0, x1: 100, y1: 0, strokeWidth: 1, dash: null, closed: false },     // real pipe leg
+    { x0: 100, y0: 0, x1: 140, y1: 90, strokeWidth: 1, dash: null, closed: false },  // stray diagonal (~21° off-grid) touching the same point
+  ];
+  const graph = buildLineGraph(segments, []);
+  const tagBbox = { minX: 20, maxX: 40, minY: -20, maxY: -5 };
+  const anchor = anchorPointForTag(graph, tagBbox);
+  const traced = traceFromAnchor(graph, anchor);
+  check('trace reaches the corner', traced.some(([x, y]) => x === 100 && y === 0));
+  check('trace does not follow the off-grid edge past the corner',
+    !traced.some(([x, y]) => x === 140 && y === 90), JSON.stringify(traced));
+}
+
 // ---------------------------------------------------------------------------
 section('Simplifying near-collinear points');
 {
