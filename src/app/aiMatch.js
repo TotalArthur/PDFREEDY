@@ -230,4 +230,4 @@ function initAiMatch() {
   askAiFallbackBtn.addEventListener('click', askAiFallback);
 }
 
-export { initAiMatch, updateAskAiVisibility };
+export { initAiMatch, updateAskAiVisibility, isApproved };

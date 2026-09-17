@@ -7,6 +7,7 @@ import { loadCorrections, updateCorrectionsBar, clearCorrections, pullSharedCorr
 import { runFullSearch } from './search.js';
 import { initAuth, onAuthReady } from './auth.js';
 import { initAiMatch } from './aiMatch.js';
+import { initAiPageOcr, updateAiPageOcrVisibility } from './aiPageOcr.js';
 import './pdf.js';
 import './queue.js';
 import './results.js';
@@ -26,7 +27,9 @@ loadCorrections();
 updateCorrectionsBar();
 
 initAiMatch();
+initAiPageOcr();
 onAuthReady(() => {
   pullSharedCorrections();
+  updateAiPageOcrVisibility();
 });
 initAuth();

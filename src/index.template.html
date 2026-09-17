@@ -444,6 +444,14 @@
     cursor: pointer;
   }
   #askAiBtn:hover, #askAiFallbackBtn:hover { background: #1c3450; }
+  #aiPageOcrBtn {
+    padding: 6px 11px; border-radius: 6px; font-size: 13px;
+    border: 1px solid var(--accent-dim); background: var(--panel-2); color: var(--accent);
+    cursor: pointer;
+  }
+  #aiPageOcrBtn:hover:not(:disabled) { background: #1c3450; }
+  #aiPageOcrBtn:disabled { opacity: .6; cursor: default; }
+  #aiPageOcrStatus { font-size: 12px; color: var(--text-dim); }
   #askAiPanel {
     margin-top: 8px; padding: 10px; border-radius: 8px; background: var(--panel-2);
     border: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; color: var(--text);
@@ -534,6 +542,8 @@
         <span id="pageCountLabel">/ 1</span>
         <button id="nextPageBtn">Next &rarr;</button>
         <span id="currentPageBadge" class="page-badge pending">—</span>
+        <button id="aiPageOcrBtn" hidden title="Uploads this one page's image to Gemini to find labels the local scan might have missed. Only this page, only when you click it.">&#10024; Read this page with AI</button>
+        <span id="aiPageOcrStatus" hidden></span>
         <div class="toolbar-sep"></div>
         <button id="zoomOutBtn">&minus;</button>
         <span id="zoomLabel">100%</span>

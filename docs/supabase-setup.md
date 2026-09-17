@@ -1,10 +1,16 @@
 # The cloud backend (Supabase) — the accuracy brain
 
 This turns on: accounts with an approval step, a shared OCR-correction library, usage
-logging, and an "Ask AI" button that sends uncertain OCR reads to Gemini for a second
-opinion. It does **one job** — make matching more accurate over time, shared across
-everyone approved to use it. There is deliberately no PDF/file storage anywhere in this
-backend; it never sees your drawings, only short OCR text strings.
+logging, an "Ask AI" button that sends uncertain OCR reads to Gemini for a second opinion,
+and an opt-in "Read this page with AI" button. It does **one job** — make matching more
+accurate over time, shared across everyone approved to use it. There is deliberately no
+PDF/file storage anywhere in this backend.
+
+One exception to "never sends anything but short text": **"Read this page with AI"**
+uploads that one page's rendered image to Gemini's vision model, and only that one page,
+and only when you click it — never automatically, never a whole document at once. Every
+other feature here (accounts, corrections, "Ask AI", "Ask AI to search the whole
+document") only ever sends short text strings the app already extracted, never an image.
 
 This project's backend is already fully set up and deployed (project ref
 `oixeiotnwosvdatequkv`) — this doc is the reference for what's running and how to change
@@ -25,7 +31,8 @@ who can read/write what in the database regardless of what the UI shows.)
 | `corrections` table | The brain itself — shared map of garbled OCR reads to their true tag, plus a `confirm_count` that goes up each time the same fix is confirmed again |
 | `confirm_correction()` function | Writes to `corrections`, incrementing `confirm_count` on repeats instead of just overwriting |
 | `usage_events` table | Lightweight log (sign-ins, AI-assist calls) — admins only, no drawing content ever |
-| `match-assist` edge function | Calls Gemini (`gemini-3.5-flash-lite`) with the query + candidates, returns a plausibility verdict per candidate. Two modes: `verdict` (a handful of "Possible"-band hits) and `fallback` (every extracted word, when the local matcher found nothing at all) |
+| `match-assist` edge function | Calls Gemini (`gemini-3.5-flash-lite`) with the query + candidates (text only), returns a plausibility verdict per candidate. Two modes: `verdict` (a handful of "Possible"-band hits) and `fallback` (every extracted word, when the local matcher found nothing at all) |
+| `ocr-page` edge function | The one function that takes an image: one page's rendered picture, uploaded only on an explicit "Read this page with AI" click. Returns every tag/label Gemini's vision model finds, each with a bounding box in Gemini's own `box_2d` convention (integers 0-1000, `[ymin,xmin,ymax,xmax]`) |
 
 ## Two ways to confirm a fix, everywhere they appear
 
@@ -67,21 +74,23 @@ The AI never writes to the database by itself; a person always clicks to confirm
 and run it. Every statement is guarded (`if not exists` / `drop ... if exists`), so
 re-running the whole file is always safe.
 
-**Redeploying the AI function** (e.g. after editing `supabase/functions/match-assist/index.ts`)
-needs the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started):
+**Redeploying an AI function** (e.g. after editing either function's `index.ts`) needs the
+[Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started):
 
 ```bash
 supabase login
 supabase link --project-ref oixeiotnwosvdatequkv
 supabase functions deploy match-assist
+supabase functions deploy ocr-page
 ```
 
-**Changing the Gemini key or model**:
+**Changing the Gemini key or model** (shared by both functions):
 
 ```bash
 supabase secrets set GEMINI_API_KEY=your-new-key
 supabase secrets set GEMINI_MODEL=gemini-3.5-flash-lite   # or another Gemini model
 supabase functions deploy match-assist
+supabase functions deploy ocr-page
 ```
 
 The Gemini key only ever lives in Supabase's encrypted secrets store — it's never in any
