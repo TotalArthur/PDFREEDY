@@ -177,6 +177,7 @@ function renderVerdicts(query, candidates, verdicts, bestIndex, { fallback } = {
         logUsageEvent('ai_verdict_accepted', { query });
         confirmBtn.textContent = '✓ Confirmed';
         confirmBtn.disabled = true;
+        confirmBtn.classList.add('just-confirmed');
         runFullSearch();
       });
       row.appendChild(confirmBtn);

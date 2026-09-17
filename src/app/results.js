@@ -69,6 +69,7 @@ function buildResultElement(res, i) {
         setCorrection(res.rawText, S.currentQuery.raw);
         confirmBtn.textContent = '✓ Confirmed';
         confirmBtn.disabled = true;
+        confirmBtn.classList.add('just-confirmed');
         runFullSearch();
       });
       topRow.appendChild(confirmBtn);
