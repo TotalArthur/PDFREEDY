@@ -20,19 +20,20 @@ By default, the PDF you open is read in your browser via `FileReader` and never 
 machine — nothing is uploaded anywhere, including when this page is hosted on GitHub Pages.
 Only three libraries (pdf.js, pdf-lib and tesseract.js) are fetched from a public CDN.
 
-This build also has an **optional** cloud layer (Supabase — see
-[docs/supabase-setup.md](docs/supabase-setup.md)) that adds accounts, a shared OCR-correction
-library, cloud-saved projects and AI-assisted matching for uncertain reads. It stays off
-entirely — the app is 100% local, no different from the paragraph above — until
-`src/app/supabaseConfig.js` is filled in with a project URL and key. Once it's on:
+This build also has an **optional** cloud "accuracy brain" (Supabase — see
+[docs/supabase-setup.md](docs/supabase-setup.md)): a shared OCR-correction library and
+AI-assisted matching for uncertain reads, both aimed at one thing — getting the same
+misread right every time it comes up again, for everyone. It stores no PDFs, no pages, no
+images; nothing about your drawings goes anywhere. It stays off entirely — the app is 100%
+local, no different from the paragraph above — until `src/app/supabaseConfig.js` is filled
+in with a project URL and key. Once it's on:
 
 - Signing in is optional — search, OCR, markup and export all still work fully signed
-  out. Being **approved** unlocks the cloud extras: shared OCR corrections, cloud-saved
-  projects and AI-assist.
-- A PDF is only ever uploaded when you explicitly click **Save** in the Projects panel —
-  opening/searching a PDF locally still never sends it anywhere.
+  out. Being **approved** unlocks the shared corrections library and AI-assist.
 - The AI-assist feature sends only short OCR text strings and confidence numbers to a
-  Supabase Edge Function (which relays them to Gemini) — never the PDF or a page image.
+  Supabase Edge Function (which relays them to Gemini) — never the PDF or a page image. A
+  correction is only ever saved when a person clicks "Save as correction" on a specific
+  AI verdict — the AI never writes to the shared library on its own.
 
 > Private property of Arthur Dickson — not for use without express permission.
 

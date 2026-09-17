@@ -6,11 +6,11 @@
 // Once configured, signing in is OPTIONAL and never blocks local search,
 // OCR, markup or export — those keep working fully signed out, exactly as
 // advertised in the README. What being signed in and approved
-// (profiles.status = 'active') unlocks is the cloud extras: the shared OCR
-// corrections library, cloud-saved projects, and AI-assisted matching —
-// each of those checks S.profile itself before doing anything (see
-// corrections.js, projects.js, aiMatch.js), so this module's only job is
-// keeping S.user/S.profile in sync and reflecting status in the header.
+// (profiles.status = 'active') unlocks is the accuracy brain: the shared
+// OCR corrections library and AI-assisted matching — each of those checks
+// S.profile itself before doing anything (see corrections.js, aiMatch.js),
+// so this module's only job is keeping S.user/S.profile in sync and
+// reflecting status in the header.
 import { sb, CLOUD_ENABLED } from './supabaseClient.js';
 import { S } from './state.js';
 import { logUsageEvent } from './usage.js';
@@ -27,7 +27,6 @@ const userBadge = $('userBadge');
 const userEmailLabel = $('userEmailLabel');
 const signInBtn = $('signInBtn');
 const signOutBtn = $('signOutBtn');
-const projectsBtn = $('projectsBtn');
 
 const authReadyListeners = [];
 function onAuthReady(fn) { authReadyListeners.push(fn); }
@@ -45,7 +44,6 @@ function renderBadge(state, session, profile) {
   userBadge.hidden = false;
   signInBtn.hidden = state !== 'signedOut';
   signOutBtn.hidden = state === 'signedOut';
-  projectsBtn.hidden = state !== 'active';
 
   if (state === 'signedOut') userEmailLabel.textContent = '';
   else if (state === 'pending') userEmailLabel.textContent = session.user.email + ' (pending approval)';

@@ -32,8 +32,8 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <!--
-  Supabase client — powers the optional cloud features (accounts, shared OCR
-  corrections library, saved projects, AI-assisted matching). Exposes a
+  Supabase client — powers the optional cloud "accuracy brain" (accounts,
+  shared OCR corrections library, AI-assisted matching). Exposes a
   window.supabase global, same CDN-global pattern as the three scripts
   above. If src/app/supabaseConfig.js is left blank, this is loaded but
   never used — the app stays fully local.
@@ -388,7 +388,7 @@
   ::-webkit-scrollbar-thumb { background: #3a3d42; border-radius: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
 
-  /* ---------- Auth / projects overlays ---------- */
+  /* ---------- Auth overlay ---------- */
   .modal-overlay {
     position: fixed; inset: 0; z-index: 200; display: flex;
     align-items: center; justify-content: center;
@@ -424,19 +424,6 @@
   }
   .badge-btn:hover { color: var(--text); border-color: var(--accent); }
 
-  #projectsOverlay .modal-card { width: 420px; }
-  .project-row {
-    display: flex; align-items: center; gap: 10px; padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .project-meta { flex: 1; min-width: 0; }
-  .project-name { font-size: 13px; font-weight: 600; }
-  .project-sub { font-size: 11px; color: var(--text-dim); }
-  .project-btns { display: flex; gap: 6px; flex-shrink: 0; }
-  .project-btns button { padding: 5px 9px; font-size: 11.5px; }
-  .project-save-row { display: flex; gap: 6px; margin-bottom: 12px; }
-  .project-save-row input { margin-bottom: 0; flex: 1; }
-  #projectsStatus { font-size: 12px; color: var(--text-dim); margin-top: 8px; min-height: 14px; }
   .modal-close-row { display: flex; justify-content: flex-end; margin-top: 14px; }
 
   /* ---------- Ask AI ---------- */
@@ -451,6 +438,22 @@
     border: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; color: var(--text);
     white-space: pre-wrap;
   }
+  .ai-verdict {
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  .ai-verdict:last-child { border-bottom: none; }
+  .ai-verdict-head {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px;
+  }
+  .ai-verdict-text { font-family: var(--mono); font-size: 12px; }
+  .ai-verdict-reason { color: var(--text-dim); font-size: 12px; line-height: 1.4; }
+  .ai-save-btn {
+    margin-top: 6px; padding: 4px 9px; font-size: 11.5px; border-radius: 5px;
+    border: 1px solid var(--accent-dim); background: var(--panel); color: var(--accent);
+    cursor: pointer;
+  }
+  .ai-save-btn:hover:not(:disabled) { background: #1c3450; }
+  .ai-save-btn:disabled { opacity: .6; cursor: default; color: var(--good); border-color: var(--good); }
 </style>
 </head>
 <body>
@@ -462,7 +465,6 @@
     <div class="file-controls">
       <div id="userBadge" class="user-badge" hidden>
         <span id="userEmailLabel"></span>
-        <button id="projectsBtn" class="badge-btn" hidden>Projects</button>
         <button id="signInBtn" class="badge-btn" hidden>Sign in</button>
         <button id="signOutBtn" class="badge-btn" hidden>Sign out</button>
       </div>
@@ -592,16 +594,16 @@
 
 <!--
   Signing in is optional and never blocks the local tool — search, OCR,
-  markup and export all work fully signed out. It only unlocks the cloud
-  extras (shared corrections, cloud projects, AI-assist), and only once the
-  account is approved (see docs/supabase-setup.md). This overlay is a normal
-  dismissible dialog, not a gate: it opens from the header's "Sign in"
-  button and closes on its own X, same as the Projects panel below.
+  markup and export all work fully signed out. It only unlocks the shared
+  corrections library and AI-assist, and only once the account is approved
+  (see docs/supabase-setup.md). This overlay is a normal dismissible
+  dialog, not a gate: it opens from the header's "Sign in" button and
+  closes on its own X.
 -->
 <div id="authOverlay" class="modal-overlay" hidden>
   <div class="modal-card">
     <h2>Sign in</h2>
-    <p class="auth-sub">Unlocks shared OCR corrections, cloud-saved projects and AI-assisted matching. Local search/markup/export work either way.</p>
+    <p class="auth-sub">Unlocks the shared OCR-correction library and AI-assisted matching. Local search/markup/export work either way.</p>
 
     <div id="authForm">
       <input type="email" id="authEmail" placeholder="Email" autocomplete="email">
@@ -614,20 +616,6 @@
     </div>
 
     <div class="modal-close-row"><button id="authCloseBtn" class="secondary">Close</button></div>
-  </div>
-</div>
-
-<div id="projectsOverlay" class="modal-overlay" hidden>
-  <div class="modal-card">
-    <h2>Projects</h2>
-    <p class="auth-sub">PDFs saved here are uploaded to your account's cloud storage.</p>
-    <div class="project-save-row">
-      <input type="text" id="projectNameInput" placeholder="Name for the currently open PDF">
-      <button id="saveProjectBtn">Save</button>
-    </div>
-    <div id="projectsList"></div>
-    <div id="projectsStatus"></div>
-    <div class="modal-close-row"><button id="projectsCloseBtn" class="secondary">Close</button></div>
   </div>
 </div>
 
@@ -847,7 +835,7 @@
   }
   function pushCorrectionToCloud(rawKey, corrected) {
     if (!CLOUD_ENABLED || !sb || !S.user) return;
-    sb.from("corrections").upsert({ raw_key: rawKey, corrected, created_by: S.user.id }, { onConflict: "raw_key" }).then(({ error }) => {
+    sb.rpc("confirm_correction", { p_raw_key: rawKey, p_corrected: corrected }).then(({ error }) => {
       if (error) console.warn("Could not save correction to shared library:", error);
     });
   }
@@ -2759,18 +2747,56 @@
     askAiBtn.hidden = candidates.length === 0;
     askAiPanel.hidden = true;
   }
+  function renderVerdicts(query, candidates, verdicts, bestIndex) {
+    askAiPanel.innerHTML = "";
+    if (!verdicts.length) {
+      askAiPanel.textContent = "Gemini found nothing plausible among these candidates.";
+      return;
+    }
+    for (const v of verdicts) {
+      const candidate = candidates[v.index - 1];
+      if (!candidate) continue;
+      const row = document.createElement("div");
+      row.className = "ai-verdict" + (v.plausible ? " plausible" : "");
+      const head = document.createElement("div");
+      head.className = "ai-verdict-head";
+      head.innerHTML = '<span class="ai-verdict-text"></span><span class="badge ' + (v.plausible ? "badge-fixed" : "badge-page") + '"></span>' + (v.index === bestIndex ? '<span class="badge badge-text">BEST GUESS</span>' : "");
+      head.querySelector(".ai-verdict-text").textContent = "Page " + candidate.page + ': "' + candidate.rawText + '"';
+      head.querySelector(".badge:not(.badge-text)").textContent = v.plausible ? "Plausible" : "Not plausible";
+      row.appendChild(head);
+      const reason = document.createElement("div");
+      reason.className = "ai-verdict-reason";
+      reason.textContent = v.reason || "";
+      row.appendChild(reason);
+      if (v.plausible) {
+        const saveBtn = document.createElement("button");
+        saveBtn.className = "ai-save-btn";
+        saveBtn.textContent = 'Save as correction for "' + query + '"';
+        saveBtn.addEventListener("click", () => {
+          setCorrection(candidate.rawText, query);
+          logUsageEvent("ai_verdict_accepted", { query });
+          saveBtn.textContent = 'Saved \u2014 reads as "' + query + '" from now on';
+          saveBtn.disabled = true;
+          runFullSearch();
+        });
+        row.appendChild(saveBtn);
+      }
+      askAiPanel.appendChild(row);
+    }
+  }
   async function askAi() {
     const candidates = possibleCandidates();
     if (!candidates.length) return;
+    const query = S.currentQuery.raw;
     askAiPanel.hidden = false;
     askAiPanel.textContent = "Asking\u2026";
-    logUsageEvent("ai_match_requested", { query: S.currentQuery.raw, candidateCount: candidates.length });
+    logUsageEvent("ai_match_requested", { query, candidateCount: candidates.length });
     try {
       const { data, error } = await sb.functions.invoke("match-assist", {
-        body: { query: S.currentQuery.raw, candidates }
+        body: { query, candidates }
       });
       if (error) throw error;
-      askAiPanel.textContent = data && data.answer || "No response.";
+      renderVerdicts(query, candidates, data && data.verdicts || [], data && data.bestIndex);
     } catch (err) {
       console.warn("AI match-assist failed:", err);
       askAiPanel.textContent = "AI assist unavailable right now (" + (err.message || err) + ").";
@@ -3748,7 +3774,6 @@
   var userEmailLabel = $3("userEmailLabel");
   var signInBtn = $3("signInBtn");
   var signOutBtn = $3("signOutBtn");
-  var projectsBtn = $3("projectsBtn");
   var authReadyListeners = [];
   function onAuthReady(fn) {
     authReadyListeners.push(fn);
@@ -3768,7 +3793,6 @@
     userBadge.hidden = false;
     signInBtn.hidden = state !== "signedOut";
     signOutBtn.hidden = state === "signedOut";
-    projectsBtn.hidden = state !== "active";
     if (state === "signedOut") userEmailLabel.textContent = "";
     else if (state === "pending") userEmailLabel.textContent = session.user.email + " (pending approval)";
     else if (state === "revoked") userEmailLabel.textContent = session.user.email + " (access revoked)";
@@ -3845,119 +3869,6 @@
     });
   }
 
-  // src/app/projects.js
-  var BUCKET = "pdfs";
-  var $4 = (id) => document.getElementById(id);
-  var projectsBtn2 = $4("projectsBtn");
-  var projectsOverlay = $4("projectsOverlay");
-  var projectsCloseBtn = $4("projectsCloseBtn");
-  var projectsList = $4("projectsList");
-  var saveProjectBtn = $4("saveProjectBtn");
-  var projectNameInput = $4("projectNameInput");
-  var projectsStatus = $4("projectsStatus");
-  function setStatus(msg) {
-    projectsStatus.textContent = msg || "";
-  }
-  async function saveCurrentAsProject() {
-    if (!CLOUD_ENABLED || !sb || !S.user) return;
-    if (!S.rawFileBytes || !S.fileName) {
-      setStatus("Open a PDF first.");
-      return;
-    }
-    const name = projectNameInput.value.trim() || S.fileName;
-    setStatus("Saving\u2026");
-    try {
-      const { data: project, error: projErr } = await sb.from("projects").insert({ user_id: S.user.id, name }).select().single();
-      if (projErr) throw projErr;
-      const path = S.user.id + "/" + project.id + "/" + S.fileName;
-      const blob = new Blob([S.rawFileBytes], { type: "application/pdf" });
-      const { error: upErr } = await sb.storage.from(BUCKET).upload(path, blob, { upsert: true });
-      if (upErr) throw upErr;
-      const { error: fileErr } = await sb.from("project_files").insert({ project_id: project.id, storage_path: path, filename: S.fileName });
-      if (fileErr) throw fileErr;
-      logUsageEvent("project_saved", { project_id: project.id });
-      setStatus("Saved.");
-      projectNameInput.value = "";
-      await refreshProjectsList();
-    } catch (err) {
-      console.warn("Save to cloud failed:", err);
-      setStatus("Save failed: " + (err.message || err));
-    }
-  }
-  async function refreshProjectsList() {
-    projectsList.innerHTML = '<div class="empty-note">Loading\u2026</div>';
-    const { data: projects, error } = await sb.from("projects").select("id,name,created_at,project_files(id,storage_path,filename)").order("created_at", { ascending: false });
-    if (error) {
-      projectsList.innerHTML = '<div class="empty-note">Could not load projects.</div>';
-      return;
-    }
-    if (!projects.length) {
-      projectsList.innerHTML = '<div class="empty-note">No saved projects yet.</div>';
-      return;
-    }
-    projectsList.innerHTML = "";
-    for (const p of projects) {
-      const row = document.createElement("div");
-      row.className = "project-row";
-      const file = p.project_files && p.project_files[0];
-      const meta = document.createElement("div");
-      meta.className = "project-meta";
-      meta.innerHTML = '<div class="project-name"></div><div class="project-sub"></div>';
-      meta.querySelector(".project-name").textContent = p.name;
-      meta.querySelector(".project-sub").textContent = new Date(p.created_at).toLocaleString() + (file ? "" : " \u2014 no file attached");
-      row.appendChild(meta);
-      const btnRow = document.createElement("div");
-      btnRow.className = "project-btns";
-      if (file) {
-        const openBtn = document.createElement("button");
-        openBtn.textContent = "Open";
-        openBtn.addEventListener("click", () => openProjectFile(file));
-        btnRow.appendChild(openBtn);
-      }
-      const delBtn = document.createElement("button");
-      delBtn.className = "cancel";
-      delBtn.textContent = "Delete";
-      delBtn.addEventListener("click", () => deleteProject(p, file));
-      btnRow.appendChild(delBtn);
-      row.appendChild(btnRow);
-      projectsList.appendChild(row);
-    }
-  }
-  async function openProjectFile(file) {
-    setStatus("Downloading\u2026");
-    const { data, error } = await sb.storage.from(BUCKET).download(file.storage_path);
-    if (error) {
-      setStatus("Download failed: " + error.message);
-      return;
-    }
-    const pdfFile = new File([data], file.filename, { type: "application/pdf" });
-    projectsOverlay.hidden = true;
-    await loadPdf(pdfFile);
-    setStatus("");
-  }
-  async function deleteProject(project, file) {
-    if (!window.confirm('Delete "' + project.name + '"? This cannot be undone.')) return;
-    if (file) await sb.storage.from(BUCKET).remove([file.storage_path]);
-    const { error } = await sb.from("projects").delete().eq("id", project.id);
-    if (error) {
-      setStatus("Delete failed: " + error.message);
-      return;
-    }
-    await refreshProjectsList();
-  }
-  function initProjects() {
-    if (!CLOUD_ENABLED) return;
-    projectsBtn2.addEventListener("click", () => {
-      projectsOverlay.hidden = false;
-      setStatus("");
-      refreshProjectsList();
-    });
-    projectsCloseBtn.addEventListener("click", () => {
-      projectsOverlay.hidden = true;
-    });
-    saveProjectBtn.addEventListener("click", saveCurrentAsProject);
-  }
-
   // src/app/export.js
   function hexToRgb01(hex) {
     const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
@@ -4027,7 +3938,6 @@
   });
   loadCorrections();
   updateCorrectionsBar();
-  initProjects();
   initAiMatch();
   onAuthReady(() => {
     pullSharedCorrections();

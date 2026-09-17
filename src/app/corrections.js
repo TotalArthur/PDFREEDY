@@ -74,8 +74,12 @@ async function pullSharedCorrections() {
 
 function pushCorrectionToCloud(rawKey, corrected) {
   if (!CLOUD_ENABLED || !sb || !S.user) return;
-  sb.from('corrections')
-    .upsert({ raw_key: rawKey, corrected, created_by: S.user.id }, { onConflict: 'raw_key' })
+  // RPC instead of a plain upsert: confirm_correction() increments
+  // confirm_count when this (raw -> corrected) pair already exists, so a
+  // correction independently confirmed more than once carries more weight
+  // than one seen a single time — the "brain" gets more sure, not just
+  // bigger.
+  sb.rpc('confirm_correction', { p_raw_key: rawKey, p_corrected: corrected })
     .then(({ error }) => { if (error) console.warn('Could not save correction to shared library:', error); });
 }
 function getCorrection(rawText) {

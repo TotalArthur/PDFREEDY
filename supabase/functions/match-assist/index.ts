@@ -1,9 +1,15 @@
-// match-assist — Supabase Edge Function.
+// match-assist — Supabase Edge Function. Part of the "accuracy brain":
+// this is the only piece of the backend that calls out to an LLM, and it
+// exists purely to turn ambiguous OCR reads into confirmed corrections.
 //
 // Called from src/app/aiMatch.js. Takes the search query plus a short list
 // of ambiguous OCR reads (text + confidence, never the PDF or any image),
-// asks Gemini whether any of them plausibly are the tag being searched for,
-// and returns a short plain-text judgement.
+// asks Gemini for a per-candidate plausibility verdict in structured JSON,
+// so the client can offer "save as correction" on whichever ones Gemini
+// endorses — accepting one writes it straight into the shared corrections
+// table (public.corrections) via confirm_correction(), same as manually
+// using "Fix text". The AI never writes to the database itself; a human in
+// the loop always confirms before anything is remembered.
 //
 // Deploy:
 //   supabase functions deploy match-assist --project-ref <your-project-ref>
@@ -26,6 +32,30 @@ const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+const RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    verdicts: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          index: { type: 'INTEGER', description: '1-based index matching the candidate list' },
+          plausible: { type: 'BOOLEAN' },
+          reason: { type: 'STRING', description: 'One short sentence.' },
+        },
+        required: ['index', 'plausible', 'reason'],
+      },
+    },
+    bestIndex: {
+      type: 'INTEGER',
+      nullable: true,
+      description: 'Index of the single strongest candidate, or null if none are plausible.',
+    },
+  },
+  required: ['verdicts'],
 };
 
 function json(body: unknown, status = 200) {
@@ -80,10 +110,10 @@ Deno.serve(async (req) => {
     `You are helping an engineer search a P&ID (piping and instrumentation diagram) drawing for the tag "${query}".\n` +
     `A local matcher already found these as its weakest ("Possible") candidates — OCR reads that only match ` +
     `the tag after allowing for character-recognition damage:\n\n${candidateLines}\n\n` +
-    `For each candidate, judge in one short line whether it plausibly IS "${query}", given how OCR commonly ` +
-    `confuses characters (0/O, 1/I/l, 5/S, 8/B, 6/G, 2/Z) and can drop characters entirely on blurred scans. ` +
-    `End with a one-line overall recommendation of which candidate (if any) to check first. ` +
-    `Be concise — this is read in a small sidebar panel, not a report. No markdown formatting.`;
+    `For each candidate (1 to ${candidates.length}), judge whether it plausibly IS "${query}", given how OCR ` +
+    `commonly confuses characters (0/O, 1/I/l, 5/S, 8/B, 6/G, 2/Z) and can drop characters entirely on blurred ` +
+    `scans. Be conservative — only mark plausible=true when the OCR damage is physically explainable, not on a ` +
+    `guess. Set bestIndex to the single strongest candidate if any are plausible, otherwise null.`;
 
   try {
     const resp = await fetch(
@@ -93,7 +123,12 @@ Deno.serve(async (req) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 800,
+            responseMimeType: 'application/json',
+            responseSchema: RESPONSE_SCHEMA,
+          },
         }),
       }
     );
@@ -102,10 +137,14 @@ Deno.serve(async (req) => {
       return json({ error: 'Gemini request failed: ' + errText.slice(0, 300) }, 502);
     }
     const data = await resp.json();
-    const answer =
-      data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') ||
-      'Gemini returned no answer.';
-    return json({ answer });
+    const raw = data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('') || '';
+    let parsed: { verdicts?: unknown; bestIndex?: number | null };
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return json({ error: 'Gemini returned unparseable output' }, 502);
+    }
+    return json({ verdicts: parsed.verdicts || [], bestIndex: parsed.bestIndex ?? null });
   } catch (err) {
     return json({ error: 'Gemini request threw: ' + (err instanceof Error ? err.message : String(err)) }, 502);
   }

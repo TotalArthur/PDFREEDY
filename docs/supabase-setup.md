@@ -1,100 +1,77 @@
-# Setting up the cloud backend (Supabase)
+# The cloud backend (Supabase) — the accuracy brain
 
-This turns on: accounts with an approval step, a shared OCR-correction library, cloud-saved
-projects (PDF storage), usage logging, and an "Ask AI" button that sends uncertain OCR
-reads to Gemini for a second opinion. Everything below is a one-time setup. The code side
-is already done — this is just the account/dashboard steps only you can do.
+This turns on: accounts with an approval step, a shared OCR-correction library, usage
+logging, and an "Ask AI" button that sends uncertain OCR reads to Gemini for a second
+opinion. It does **one job** — make matching more accurate over time, shared across
+everyone approved to use it. There is deliberately no PDF/file storage anywhere in this
+backend; it never sees your drawings, only short OCR text strings.
+
+This project's backend is already fully set up and deployed (project ref
+`oixeiotnwosvdatequkv`) — this doc is the reference for what's running and how to change
+it later, not a from-scratch walkthrough.
 
 **Signing in is optional and never blocks the local tool.** Search, OCR, markup and export
-all work fully signed out, exactly as before — the README's "never leaves your machine"
-promise stays true for anyone who never signs in. Approval only gates the cloud extras
-(shared corrections, cloud projects, AI-assist), not the app itself. (An earlier version of
-this feature gated the whole app behind sign-in; that turned out to be worse in every way —
-it made the tool unusable the moment the network was down, and it isn't real security
-either way since it's client-side JS anyone can read. The actual enforcement boundary is
-server-side: Row Level Security decides who can read/write what, regardless of what the UI
-shows.)
+all work fully signed out — the README's "never leaves your machine" promise stays true for
+anyone who never signs in. Approval only gates the shared corrections library and AI-assist,
+not the app itself. (The client-side gate isn't real security either way — it's JS anyone
+can read. The actual enforcement boundary is server-side Row Level Security, which decides
+who can read/write what in the database regardless of what the UI shows.)
 
-## 1. Create the Supabase project
+## What's deployed
 
-1. Go to [supabase.com](https://supabase.com) and sign in / create an account.
-2. **New project** → pick an organization, name it (e.g. `pdfreedy`), set a database
-   password (save it somewhere — you likely won't need it again unless you use the CLI),
-   pick a region close to you.
-3. Wait ~2 minutes for provisioning.
+| Piece | What it does |
+|---|---|
+| `profiles` table | One row per account; `status` (`pending`/`active`/`revoked`) gates everything else |
+| `corrections` table | The brain itself — shared map of garbled OCR reads to their true tag, plus a `confirm_count` that goes up each time the same fix is confirmed again |
+| `confirm_correction()` function | Writes to `corrections`, incrementing `confirm_count` on repeats instead of just overwriting |
+| `usage_events` table | Lightweight log (sign-ins, AI-assist calls) — admins only, no drawing content ever |
+| `match-assist` edge function | Calls Gemini (`gemini-2.5-flash-lite`) with the query + ambiguous OCR reads, returns a plausibility verdict per candidate |
 
-## 2. Get your API keys — done
+## How the AI-assist loop actually improves accuracy
 
-`src/app/supabaseConfig.js` already has your project's URL and publishable key filled in
-(project ref `oixeiotnwosvdatequkv`). That key is safe to ship in the built file — it
-identifies the project, not a person; access is enforced by the database rules from step 3,
-not by keeping this key secret. Nothing to do here unless you rotate it later.
+1. A search comes back with "Possible"-band hits — the local matcher's weakest tier.
+2. Clicking **Ask AI** sends the query and those candidates' OCR text/confidence to
+   `match-assist`, which asks Gemini for a plausible/not verdict + reason on each one.
+3. Each plausible verdict gets a **"Save as correction"** button. Clicking it calls the
+   same `setCorrection()` path as manually using "Fix text" — it writes straight into
+   `corrections` via `confirm_correction()`.
+4. From then on, every user who hits that same garbled OCR read gets the correct tag
+   automatically, with no AI call needed — the fix is now free and instant for everyone.
 
-## 3. Create the database schema
+The AI never writes to the database by itself; a person always clicks to confirm first.
 
-**SQL Editor → New query**, paste the entire contents of `supabase/schema.sql` from this
-repo, and click **Run**. This creates every table (`profiles`, `corrections`, `projects`,
-`project_files`, `usage_events`) and locks them down with row-level security so users can
-only ever see their own data (or, for the shared corrections library, data everyone's
-allowed to see).
+## Making changes later
 
-## 4. Create the storage bucket
+**Schema changes** — edit `supabase/schema.sql`, then paste the whole file into
+**SQL Editor → New query** in the [dashboard](https://supabase.com/dashboard/project/oixeiotnwosvdatequkv)
+and run it. Every statement is guarded (`if not exists` / `drop ... if exists`), so
+re-running the whole file is always safe.
 
-**Storage → New bucket**. Name it exactly `pdfs`, leave it **Private** (not public). The
-storage access policies were already created by the SQL you ran in step 3.
-
-## 5. Sign up once, then approve yourself
-
-1. Open the tool. It's fully usable already, signed out. Click **Sign in** in the header,
-   then **Create account** with `artwdickson@gmail.com` and a password. The header will
-   show "(pending approval)" — expected, every new signup starts pending, and the Projects
-   button and shared corrections stay off until approved.
-2. Back in the Supabase dashboard, **SQL Editor → New query**:
-
-   ```sql
-   update public.profiles set status = 'active', is_admin = true
-     where email = 'artwdickson@gmail.com';
-   ```
-
-   Run it. Reload the tool — you're in, and marked as admin.
-4. To approve anyone else later, run the same update with their email and `is_admin =
-   false`, or build a tiny admin view later — for now the SQL editor is the approval flow.
-
-## 6. Wire up the AI-assist function (Gemini)
-
-This step needs the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)
-installed on your machine (`npm install -g supabase`, or `brew install supabase/tap/supabase`).
-
-From the repo root:
+**Redeploying the AI function** (e.g. after editing `supabase/functions/match-assist/index.ts`)
+needs the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started):
 
 ```bash
 supabase login
 supabase link --project-ref oixeiotnwosvdatequkv
-supabase secrets set GEMINI_API_KEY=your-key-here
 supabase functions deploy match-assist
 ```
 
-That's it — the "Ask AI about the uncertain matches" button (shows up in the sidebar
-whenever a search has Possible-band results) will start working for approved users. It
-defaults to `gemini-2.5-flash-lite`, currently the cheapest generally-available Gemini
-model. To use a different one, set `supabase secrets set GEMINI_MODEL=gemini-...` and
-redeploy.
+**Changing the Gemini key or model**:
 
-The Gemini key only ever needs to exist in two places: wherever you copy it from, and this
-`secrets set` command. It never goes into any file in this repo — the edge function reads
-it from Supabase's encrypted secrets store at request time, so it's never shipped to the
-browser or visible to anyone without dashboard/CLI access to this project.
+```bash
+supabase secrets set GEMINI_API_KEY=your-new-key
+supabase secrets set GEMINI_MODEL=gemini-2.5-flash-lite   # or another Gemini model
+supabase functions deploy match-assist
+```
 
-## What each piece does, at a glance
+The Gemini key only ever lives in Supabase's encrypted secrets store — it's never in any
+file in this repo and never shipped to the browser.
 
-| Feature | Where | Gate |
-|---|---|---|
-| Local search / OCR / markup / export | everywhere | none — works fully signed out |
-| Sign in / sign up | "Sign in" button in header, opens a dismissible dialog | none (anyone can create an account) |
-| Shared OCR corrections | automatic, syncs on sign-in | active account |
-| Save/open PDF in the cloud | "Projects" button in header | active account, explicit click to upload |
-| Ask AI | button under search, appears when results include uncertain matches | active account + `GEMINI_API_KEY` secret set |
-| Usage log | `usage_events` table, readable by admins only | automatic for active accounts |
+**Approving a new account** — once they've signed up once (so a `profiles` row exists):
+
+```sql
+update public.profiles set status = 'active' where email = 'their-email@example.com';
+```
 
 ## Rolling it back
 
