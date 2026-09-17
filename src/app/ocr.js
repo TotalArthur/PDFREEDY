@@ -53,7 +53,13 @@ async function ensureOcrScheduler() {
   return S.ocrScheduler;
 }
 
-async function runOcrForPage(pageNum, onProgress) {
+// rotationsOverride lets a caller bypass the toggle entirely for one call —
+// used for a document's very first pass, which is always landscape-only
+// regardless of the toggle (see processPage in queue.js): that keeps
+// search unlocking fast, with any other rotations the toggle wants filled
+// in by a separate background top-up call right after, instead of every
+// document paying 4x latency up front just to become searchable at all.
+async function runOcrForPage(pageNum, onProgress, rotationsOverride) {
   const epoch = S.docEpoch;
   const data = S.pageData.get(pageNum);
 
@@ -62,7 +68,7 @@ async function runOcrForPage(pageNum, onProgress) {
   // drawings with vertical line labels, at that time cost. Only the passes this
   // page hasn't already had are run, so ticking the box after a document has
   // been read costs the three missing rotations and not a re-read.
-  const wanted = rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1);
+  const wanted = rotationsOverride || (rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1));
   const alreadyRun = data.ocrRotations || [];
   const rotations = wanted.filter(deg => !alreadyRun.includes(deg));
   if (!rotations.length) return data;

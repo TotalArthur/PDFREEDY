@@ -281,17 +281,23 @@ if (process.env.SKIP_OCR) {
   check('OCR itself reads the tag inside every bubble, not just the ones a text-layer hit already covers',
     ocrTagHits >= 5, ocrTagHits + ' of 6 bubbles read by OCR');
 
-  // ---- asking for rotated text after the fact ---------------------------
-  // Ticking the box mid-document has to put the page back to work rather than
-  // silently applying to nothing.
-  await page.check('#rotatedTextToggle');
-  check('ticking rotated-text scanning starts reading again',
-    await page.isDisabled('#searchInput') &&
-    await page.evaluate(() => document.querySelector('#viewerLoading').classList.contains('visible')));
+  // ---- rotated text scanning is on by default and never blocks search ---
+  // A page's first OCR pass is always landscape-only (that's what makes
+  // "done, ready to search" arrive quickly regardless of the toggle);
+  // with the toggle on by default, the three remaining rotations then load
+  // automatically in the background, without shutting the search box or
+  // covering the drawing again.
+  check('rotated-text scanning is on by default', await page.isChecked('#rotatedTextToggle'));
+  check('search is not shut down for the automatic rotation top-up',
+    await page.isEnabled('#searchInput'));
   await page.waitForFunction(
-    () => document.querySelector('#procDetailText').textContent.includes('done, ready to search'),
+    () => {
+      const data = window.__pdfreedyState.pageData.get(1);
+      return !!data && (data.ocrRotations || []).length === 4;
+    },
     null, { timeout: 180000 });
-  check('and finishes back in a searchable state', await page.isEnabled('#searchInput'));
+  check('all four rotation passes complete on their own', true);
+  check('and the search box was never disabled for it', await page.isEnabled('#searchInput'));
   check('the tag is still found after the extra passes',
     (await search('PT-9042')).length >= 1);
 }

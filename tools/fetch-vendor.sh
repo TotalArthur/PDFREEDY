@@ -10,6 +10,7 @@ for url in \
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js" \
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js" \
   "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js" \
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js" \
   "https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js" \
   "https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/worker.min.js" \
   "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0/tesseract-core-simd.wasm.js" \

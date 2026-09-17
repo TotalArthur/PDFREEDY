@@ -25,3 +25,6 @@ Desktop.ini
 node_modules/
 orig.html
 tests/vendor/
+
+# Supabase CLI's own local bookkeeping (version cache, link state) — never project data
+supabase/.temp/

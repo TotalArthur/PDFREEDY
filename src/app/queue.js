@@ -20,15 +20,23 @@ import {
 // up to OCR_POOL_SIZE pages worked concurrently (see runQueue below).
 // =======================================================================
 
-function startBackgroundProcessing() {
+// opts.silent: used for the automatic rotation top-up (see the end of
+// runQueue below) — that only ever ADDS words to pages already marked
+// searchable, so unlike a document's first read there's no reason to shut
+// search or cover the drawing while it runs; the sidebar's own progress
+// text is enough.
+function startBackgroundProcessing(opts = {}) {
   const epoch = S.docEpoch;
   S.isBackgroundRunning = true;
   S.processingCancelled = false;
-  // A search run against a half-read document reports tags as absent when they
-  // simply haven't been read yet, so the box stays shut until the queue drains.
-  setSearchEnabled(false);
+  S.silentTopUp = !!opts.silent;
+  if (!opts.silent) {
+    // A search run against a half-read document reports tags as absent when they
+    // simply haven't been read yet, so the box stays shut until the queue drains.
+    setSearchEnabled(false);
+    showViewerLoading('');
+  }
   cancelProcBtn.disabled = false;
-  showViewerLoading('');
   if (!S.tickerHandle) S.tickerHandle = setInterval(updateProcSummary, 500);
   runQueue(epoch);
 }
@@ -83,6 +91,38 @@ async function runQueue(epoch) {
   // Pages read while the queue was running may answer a query typed before it
   // started (a correction re-run, say), so refresh whatever is on screen.
   if (S.currentQuery.norm) updateSearchSummary();
+
+  // Automatic rotation top-up. A page's very first read only ever runs the
+  // primary (landscape) pass — see processPage below — so search unlocks as
+  // fast as it always has, regardless of the toggle. If "Also scan
+  // rotated/vertical text" is on (the default), immediately and quietly
+  // queue whatever rotations that first pass skipped: this can only ADD
+  // results to pages already marked searchable, never invalidate them, so
+  // there's no reason to shut search or cover the drawing while it runs
+  // (see the `silent` option on startBackgroundProcessing above). Naturally
+  // terminates: once every page has every rotation, queueMissingRotationPages
+  // finds nothing left and this is a no-op.
+  if (rotatedTextToggle.checked) {
+    const queued = queueMissingRotationPages();
+    if (queued) startBackgroundProcessing({ silent: true });
+  }
+}
+
+// Shared by the toggle's change handler and the automatic top-up above:
+// puts every page that's missing at least one rotation the toggle now wants
+// back in the queue (without discarding rotations it already has), and
+// reports how many pages that was.
+function queueMissingRotationPages() {
+  let queued = 0;
+  for (let p = 1; p <= S.numPages; p++) {
+    const d = S.pageData.get(p);
+    if (!d || d.status !== 'ocr-done') continue;
+    const seen = d.ocrRotations || [];
+    if (ROTATIONS.every(deg => seen.includes(deg))) continue;
+    d.status = 'pending';
+    queued++;
+  }
+  return queued;
 }
 
 async function processPage(pageNum, epoch) {
@@ -113,6 +153,13 @@ async function processPage(pageNum, epoch) {
     // at once, and clicking "skip" is only ever meant for the one on screen.
     data.skipRequested = false;
     if (pageNum === S.currentPage) { skipPageBtn.disabled = false; updatePageBadge(); }
+    // A page's very first OCR pass is always landscape-only, whatever the
+    // toggle says — that's what keeps search unlocking fast regardless of
+    // whether "Also scan rotated/vertical text" is on. A page coming back
+    // through here for the automatic (or manual) rotation top-up already
+    // has ocrRotations recorded, so it isn't a first pass, and gets the
+    // toggle-gated set of whatever rotations it's still missing.
+    const isFirstOcrPass = !(data.ocrRotations && data.ocrRotations.length);
     try {
       await runOcrForPage(pageNum, (pass, of) => {
         data.ocrProgressLabel = 'OCR pass ' + pass + ' of ' + of;
@@ -120,7 +167,7 @@ async function processPage(pageNum, epoch) {
         data.ocrPassOf = of;
         data.stepStartedAt = Date.now();
         updateProcSummary();
-      });
+      }, isFirstOcrPass ? ROTATIONS.slice(0, 1) : undefined);
       data.status = data.skipRequested ? 'skipped' : 'ocr-done';
     } catch (err) {
       console.error('OCR failed on page', pageNum, err);
@@ -173,16 +220,23 @@ function updateProcSummary() {
 
   let label = 'Processed ' + done + ' / ' + S.numPages + ' pages' + (ocrCount ? ' (' + ocrCount + ' via OCR)' : '');
   const cd = S.pageData.get(S.currentPage);
+  // The full-page "Reading the drawing…" cover is for a document's first
+  // read, where search genuinely isn't trustworthy yet. The automatic
+  // rotation top-up (S.silentTopUp) only ever adds to pages already marked
+  // searchable, so it stays out of the way — the sidebar text below is
+  // still updated either way.
   if (anyActive && cd && cd.status === 'ocr-running' && cd.ocrProgressLabel) {
     const elapsed = Math.round((Date.now() - (cd.stepStartedAt || Date.now())) / 1000);
     label += ' — page ' + S.currentPage + ': ' + cd.ocrProgressLabel + ' (running ' + elapsed + 's)';
-    showViewerLoading('Page ' + S.currentPage + ' of ' + S.numPages + ': ' +
-                      cd.ocrProgressLabel + ' — running ' + elapsed + 's');
+    if (!S.silentTopUp) {
+      showViewerLoading('Page ' + S.currentPage + ' of ' + S.numPages + ': ' +
+                        cd.ocrProgressLabel + ' — running ' + elapsed + 's');
+    }
   } else if (anyActive && cd && cd.status === 'text-extracting') {
     label += ' — page ' + S.currentPage + ': extracting text';
-    showViewerLoading('Page ' + S.currentPage + ' of ' + S.numPages + ': extracting text');
+    if (!S.silentTopUp) showViewerLoading('Page ' + S.currentPage + ' of ' + S.numPages + ': extracting text');
   } else if (anyActive) {
-    showViewerLoading('');
+    if (!S.silentTopUp) showViewerLoading('');
   }
   // Say it plainly when there is nothing left to wait for: "Processed 1 / 1"
   // on its own looks identical whether the last page is finished or still
@@ -235,15 +289,11 @@ rotatedTextToggle.addEventListener('change', () => {
     if (S.currentQuery.norm) runFullSearch();
     return;
   }
-  let queued = 0;
-  for (let p = 1; p <= S.numPages; p++) {
-    const d = S.pageData.get(p);
-    if (!d || d.status !== 'ocr-done') continue;
-    const seen = d.ocrRotations || [];
-    if (ROTATIONS.every(deg => seen.includes(deg))) continue;
-    d.status = 'pending';
-    queued++;
-  }
+  // Normally nothing's left to queue here — the automatic top-up in
+  // runQueue already does this the moment a document finishes its first
+  // read, since the toggle defaults on. This still matters if the toggle
+  // was off during that first read, or the top-up was cancelled partway.
+  const queued = queueMissingRotationPages();
   if (!queued) {
     if (S.currentQuery.norm) runFullSearch();
     return;

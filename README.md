@@ -16,9 +16,24 @@ is built from them — see [Developing](#developing).
 
 ## Privacy
 
-The PDF you open is read in your browser via `FileReader` and never leaves your machine —
-nothing is uploaded to any server, including when this page is hosted on GitHub Pages.
-Only the two libraries (pdf.js and tesseract.js) are fetched from a public CDN.
+By default, the PDF you open is read in your browser via `FileReader` and never leaves your
+machine — nothing is uploaded anywhere, including when this page is hosted on GitHub Pages.
+Only three libraries (pdf.js, pdf-lib and tesseract.js) are fetched from a public CDN.
+
+This build also has an **optional** cloud "accuracy brain" (Supabase — see
+[docs/supabase-setup.md](docs/supabase-setup.md)): a shared OCR-correction library and
+AI-assisted matching for uncertain reads, both aimed at one thing — getting the same
+misread right every time it comes up again, for everyone. It stores no PDFs, no pages, no
+images; nothing about your drawings goes anywhere. It stays off entirely — the app is 100%
+local, no different from the paragraph above — until `src/app/supabaseConfig.js` is filled
+in with a project URL and key. Once it's on:
+
+- Signing in is optional — search, OCR, markup and export all still work fully signed
+  out. Being **approved** unlocks the shared corrections library and AI-assist.
+- The AI-assist feature sends only short OCR text strings and confidence numbers to a
+  Supabase Edge Function (which relays them to Gemini) — never the PDF or a page image. A
+  correction is only ever saved when a person clicks "Save as correction" on a specific
+  AI verdict — the AI never writes to the shared library on its own.
 
 > Private property of Arthur Dickson — not for use without express permission.
 
@@ -277,17 +292,19 @@ complexity for cached page data.
 
 ### Speed vs. coverage
 
-OCR runs a **single pass in the page's native orientation** by default. A large scanned
-sheet takes roughly 1–2 minutes.
+**Also scan rotated/vertical text** is on by default, and search still opens as fast as it
+always has: a page's very first pass is always the single, primary-orientation read (the
+same ~1–2 minutes a large scanned sheet always took), whatever the checkbox says. The other
+three passes (90°/180°/270°) then run automatically afterward, in the background — search
+stays open and the drawing stays uncovered the whole time, since that extra work can only
+ever add results to a page already marked searchable, never take any away. Results for a
+page keep updating live as each rotation finishes.
 
-Ticking **"Also scan rotated/vertical text"** runs four passes (0°/90°/180°/270°) and
-merges them, mapping every box back into page coordinates. This catches vertical line
-labels but takes about 4× as long. Off by default.
-
-Ticking it *after* a document has been read doesn't start over: each page tracks which
-rotations it has already had, goes back in the queue, and runs only the three it is
-missing, appending to the words it already holds. Unticking keeps that work — it just
-stops searching the rotated words, so the results on screen always match the checkbox.
+Unticking the box doesn't throw already-read rotated words away, it just stops searching
+them, so the results on screen always match the checkbox and re-ticking is free. Ticking it
+back on (or ticking it for the first time, if it was off before a document loaded) puts
+whatever pages are still missing a rotation back in the queue for just the ones they need —
+never a full re-read.
 
 Tesseract runs in `SPARSE_TEXT` mode with a character whitelist — drawings are line art
 with scattered labels, not paragraphs, and that combination measurably cut both noise and
