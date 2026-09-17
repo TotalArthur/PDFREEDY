@@ -51,8 +51,28 @@ function buildResultElement(res, i) {
     (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) — check the crop">GLYPH</span>' : '') +
     (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : '') +
     (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : '') +
+    (res.aiFound ? '<span class="badge badge-ai" title="Not found by the local matcher — found by the AI fallback search over every extracted word">AI FOUND</span>' : '') +
     '<span class="badge badge-conf badge-conf-' + pctTier + '" title="' + escapeHtml(pctTitle) + '">' + pct + '%</span>';
   if (res.source === 'ocr') {
+    // The fast path: confirm the tool's own guess is exactly right, one
+    // click, no typing — like ticking a CAPTCHA box. Only offered where
+    // there's actually something to confirm (not on an already-exact hit),
+    // and only maps to the search query itself; anything else still goes
+    // through "Fix text" below.
+    if (bandOf(res) !== 'confirmed' && S.currentQuery.raw) {
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'confirm-btn';
+      confirmBtn.textContent = '✓ Correct';
+      confirmBtn.title = 'Confirm this really is "' + S.currentQuery.raw + '" — teaches the shared corrections library so it\'s never guessed again';
+      confirmBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        setCorrection(res.rawText, S.currentQuery.raw);
+        confirmBtn.textContent = '✓ Confirmed';
+        confirmBtn.disabled = true;
+        runFullSearch();
+      });
+      topRow.appendChild(confirmBtn);
+    }
     const fixBtn = document.createElement('button');
     fixBtn.className = 'fix-btn';
     fixBtn.textContent = res.corrected ? 'Edit fix' : 'Fix text';

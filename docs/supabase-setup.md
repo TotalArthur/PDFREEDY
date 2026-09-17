@@ -25,17 +25,37 @@ who can read/write what in the database regardless of what the UI shows.)
 | `corrections` table | The brain itself — shared map of garbled OCR reads to their true tag, plus a `confirm_count` that goes up each time the same fix is confirmed again |
 | `confirm_correction()` function | Writes to `corrections`, incrementing `confirm_count` on repeats instead of just overwriting |
 | `usage_events` table | Lightweight log (sign-ins, AI-assist calls) — admins only, no drawing content ever |
-| `match-assist` edge function | Calls Gemini (`gemini-2.5-flash-lite`) with the query + ambiguous OCR reads, returns a plausibility verdict per candidate |
+| `match-assist` edge function | Calls Gemini (`gemini-3.5-flash-lite`) with the query + candidates, returns a plausibility verdict per candidate. Two modes: `verdict` (a handful of "Possible"-band hits) and `fallback` (every extracted word, when the local matcher found nothing at all) |
+
+## Two ways to confirm a fix, everywhere they appear
+
+- **The "✓ Correct" tick** — on any uncertain (non-exact) search result. One click:
+  "yes, this really is the tag I searched for." No typing.
+- **"Fix text"** — for the rarer case where the right answer *isn't* what you searched for
+  (manual entry).
+
+Both call the same `setCorrection()` → `confirm_correction()` path, so either one teaches
+the shared brain.
 
 ## How the AI-assist loop actually improves accuracy
 
-1. A search comes back with "Possible"-band hits — the local matcher's weakest tier.
-2. Clicking **Ask AI** sends the query and those candidates' OCR text/confidence to
-   `match-assist`, which asks Gemini for a plausible/not verdict + reason on each one.
-3. Each plausible verdict gets a **"Save as correction"** button. Clicking it calls the
-   same `setCorrection()` path as manually using "Fix text" — it writes straight into
-   `corrections` via `confirm_correction()`.
-4. From then on, every user who hits that same garbled OCR read gets the correct tag
+1. A search comes back with "Possible"-band hits (the local matcher's weakest tier) — or,
+   if it found literally nothing, a **"Ask AI to search the whole document"** button
+   appears instead.
+2. **Possible-band case**: clicking **Ask AI** sends the query and those candidates' OCR
+   text/confidence to `match-assist` (mode `verdict`), which asks Gemini for a
+   plausible/not verdict + reason on each one, shown in a panel with a tick to confirm.
+3. **Nothing-found case**: clicking the fallback button sends the query plus every
+   short word/label the app has already extracted across the whole document — still just
+   text, page number and the bounding box the app already measured, never an image or an
+   AI-invented coordinate (mode `fallback`). Gemini only ever picks among positions the
+   app already knows; whatever it picks is exactly where the highlight lands. Any
+   plausible pick becomes a real row in the results list (badged **AI FOUND**), so it's
+   jumpable, highlightable and confirmable exactly like any other hit.
+4. Either way, confirming a verdict calls the same `setCorrection()` path as manually
+   using "Fix text"/the tick — it writes straight into `corrections` via
+   `confirm_correction()`.
+5. From then on, every user who hits that same garbled OCR read gets the correct tag
    automatically, with no AI call needed — the fix is now free and instant for everyone.
 
 The AI never writes to the database by itself; a person always clicks to confirm first.
@@ -60,7 +80,7 @@ supabase functions deploy match-assist
 
 ```bash
 supabase secrets set GEMINI_API_KEY=your-new-key
-supabase secrets set GEMINI_MODEL=gemini-2.5-flash-lite   # or another Gemini model
+supabase secrets set GEMINI_MODEL=gemini-3.5-flash-lite   # or another Gemini model
 supabase functions deploy match-assist
 ```
 

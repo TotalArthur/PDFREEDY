@@ -201,6 +201,7 @@
   .badge-fuzzy { background: #3a2440; color: #c58cf0; }
   .badge-confused { background: #3d3218; color: #e8bf5a; }
   .badge-fixed { background: #123a3f; color: #4fd8e6; }
+  .badge-ai { background: #2a1f4a; color: #b79bff; }
   .badge-page { background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
   .badge-conf { cursor: default; }
   .badge-conf-high { background: #274a2e; color: var(--good); }
@@ -209,9 +210,16 @@
   .result-text { font-family: var(--mono); font-size: 13px; word-break: break-word; }
   .result-text mark { background: #5a4611; color: #ffd873; border-radius: 2px; padding: 0 1px; }
   .result-raw { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; font-family: var(--mono); }
+  .confirm-btn {
+    background: none; border: 1px solid var(--good); color: var(--good);
+    border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
+    font-weight: 600;
+  }
+  .confirm-btn:hover:not(:disabled) { background: rgba(82,198,122,.15); }
+  .confirm-btn:disabled { opacity: .7; cursor: default; }
   .fix-btn {
     background: none; border: 1px solid var(--border); color: var(--text-dim);
-    border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer; margin-left: auto;
+    border-radius: 4px; font-size: 10px; padding: 1px 6px; cursor: pointer;
   }
   .fix-btn:hover { color: var(--text); border-color: var(--accent); }
   .trace-btn {
@@ -348,6 +356,9 @@
   .page-badge.error { background: #4a1c1c; color: var(--bad); }
 
   /* ---------- Canvas viewport ---------- */
+  /* Never scrolls itself — exists only so #viewerLoading has a positioning
+     parent that stays put while #canvasScroll inside it scrolls/zooms. */
+  #canvasArea { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
   #canvasScroll {
     flex: 1; overflow: auto; position: relative; background:
       repeating-conic-gradient(#1a1b1d 0% 25%, #141517 0% 50%) 50% / 20px 20px;
@@ -427,12 +438,12 @@
   .modal-close-row { display: flex; justify-content: flex-end; margin-top: 14px; }
 
   /* ---------- Ask AI ---------- */
-  #askAiBtn {
+  #askAiBtn, #askAiFallbackBtn {
     margin-top: 8px; padding: 6px 10px; font-size: 12px; border-radius: 6px;
     border: 1px solid var(--accent-dim); background: var(--panel-2); color: var(--accent);
     cursor: pointer;
   }
-  #askAiBtn:hover { background: #1c3450; }
+  #askAiBtn:hover, #askAiFallbackBtn:hover { background: #1c3450; }
   #askAiPanel {
     margin-top: 8px; padding: 10px; border-radius: 8px; background: var(--panel-2);
     border: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; color: var(--text);
@@ -447,13 +458,7 @@
   }
   .ai-verdict-text { font-family: var(--mono); font-size: 12px; }
   .ai-verdict-reason { color: var(--text-dim); font-size: 12px; line-height: 1.4; }
-  .ai-save-btn {
-    margin-top: 6px; padding: 4px 9px; font-size: 11.5px; border-radius: 5px;
-    border: 1px solid var(--accent-dim); background: var(--panel); color: var(--accent);
-    cursor: pointer;
-  }
-  .ai-save-btn:hover:not(:disabled) { background: #1c3450; }
-  .ai-save-btn:disabled { opacity: .6; cursor: default; color: var(--good); border-color: var(--good); }
+  .ai-verdict .confirm-btn { margin-top: 6px; margin-left: 0; padding: 4px 9px; font-size: 11.5px; }
 </style>
 </head>
 <body>
@@ -493,6 +498,7 @@
         </div>
         <div id="searchSummary"></div>
         <button id="askAiBtn" hidden title="Send the query and the ambiguous OCR reads (text only, never the PDF) to an AI for a second opinion">&#10024; Ask AI about the uncertain matches</button>
+        <button id="askAiFallbackBtn" hidden title="Send every extracted word (text only, never the PDF) to an AI as a last resort">&#10024; Ask AI to search the whole document</button>
         <div id="askAiPanel" hidden></div>
       </div>
 
@@ -559,19 +565,31 @@
         <button id="markupClearBtn" title="Clear all markups on this page" disabled>Clear page</button>
         <button id="markupExportBtn" title="Export a PDF with markups burned in" disabled>Export PDF</button>
       </div>
-      <div id="canvasScroll">
-        <div id="emptyViewer">
-          <div id="dropHint">
-            <b>No PDF loaded yet.</b><br><br>
-            Click "Choose File" above and pick a P&amp;ID PDF from your computer.
-            Text-layer pages are extracted instantly; scanned/raster pages are
-            OCR'd automatically in the background.
+      <div id="canvasArea">
+        <div id="canvasScroll">
+          <div id="emptyViewer">
+            <div id="dropHint">
+              <b>No PDF loaded yet.</b><br><br>
+              Click "Choose File" above and pick a P&amp;ID PDF from your computer.
+              Text-layer pages are extracted instantly; scanned/raster pages are
+              OCR'd automatically in the background.
+            </div>
+          </div>
+          <div id="canvasStage" style="display:none">
+            <canvas id="pageCanvas"></canvas>
+            <canvas id="overlayCanvas"></canvas>
           </div>
         </div>
-        <div id="canvasStage" style="display:none">
-          <canvas id="pageCanvas"></canvas>
-          <canvas id="overlayCanvas"></canvas>
-        </div>
+        <!--
+          Deliberately NOT inside #canvasScroll: that element scrolls (zooming
+          programmatically moves its scrollLeft/scrollTop to keep the cursor's
+          point fixed), and an absolutely-positioned child of a scrolling
+          element is anchored to the CONTENT's origin, not the visible
+          viewport — so it would scroll out of view right along with the
+          drawing the moment the scroll position moved off (0,0), which is
+          exactly what zooming does. Siblinged here against #canvasArea
+          (which never scrolls) instead, so it always covers the visible area.
+        -->
         <div id="viewerLoading">
           <div class="big-spinner"></div>
           <div id="viewerLoadingTitle">Reading the drawing…</div>
@@ -2729,7 +2747,13 @@
   // src/app/aiMatch.js
   var $2 = (id) => document.getElementById(id);
   var askAiBtn = $2("askAiBtn");
+  var askAiFallbackBtn = $2("askAiFallbackBtn");
   var askAiPanel = $2("askAiPanel");
+  var FALLBACK_WORD_CAP = 500;
+  var FALLBACK_WORD_LEN = [2, 30];
+  function isApproved() {
+    return !!(CLOUD_ENABLED && sb && S.user && S.profile && S.profile.status === "active");
+  }
   function possibleCandidates() {
     return S.lastResults.filter((r) => bandOf(r) === "possible").slice(0, 8).map((r) => ({
       page: r.page,
@@ -2738,19 +2762,84 @@
       confidence: typeof r.confidence === "number" ? r.confidence : null
     }));
   }
+  function allWordCandidates() {
+    const out = [];
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
+      if (!d) continue;
+      if (d.textItems) {
+        d.textItems.forEach((it, idx) => {
+          const t = (it.str || "").trim();
+          if (t.length < FALLBACK_WORD_LEN[0] || t.length > FALLBACK_WORD_LEN[1]) return;
+          out.push({ page: p, source: "text", text: t, rawText: t, confidence: null, itemIndices: [idx] });
+        });
+      }
+      if (d.ocrLines) {
+        for (const line of d.ocrLines) {
+          for (const w of line.words) {
+            const t = (w.text || "").trim();
+            if (t.length < FALLBACK_WORD_LEN[0] || t.length > FALLBACK_WORD_LEN[1]) continue;
+            out.push({ page: p, source: "ocr", text: t, rawText: t, confidence: w.confidence, bbox: w.bbox });
+          }
+        }
+      }
+      if (out.length >= FALLBACK_WORD_CAP) break;
+    }
+    return out.slice(0, FALLBACK_WORD_CAP);
+  }
   function updateAskAiVisibility() {
-    if (!CLOUD_ENABLED || !sb || !S.user) {
+    if (!isApproved()) {
       askAiBtn.hidden = true;
+      askAiFallbackBtn.hidden = true;
       return;
     }
-    const candidates = possibleCandidates();
-    askAiBtn.hidden = candidates.length === 0;
     askAiPanel.hidden = true;
+    const hasQuery = !!S.currentQuery.norm;
+    const stillProcessing = S.isBackgroundRunning;
+    if (S.lastResults.length === 0 && hasQuery && !stillProcessing) {
+      askAiBtn.hidden = true;
+      askAiFallbackBtn.hidden = allWordCandidates().length === 0;
+      return;
+    }
+    askAiFallbackBtn.hidden = true;
+    askAiBtn.hidden = possibleCandidates().length === 0;
   }
-  function renderVerdicts(query, candidates, verdicts, bestIndex) {
+  function resultFromCandidate(candidate) {
+    const base = {
+      page: candidate.page,
+      source: candidate.source,
+      text: candidate.rawText,
+      rawText: candidate.rawText,
+      confidence: candidate.confidence,
+      whole: false,
+      fuzzy: true,
+      confused: false,
+      matchPos: null,
+      matchLen: null,
+      score: 0,
+      reasons: ["Found by AI fallback search over every extracted word."],
+      aiFound: true
+    };
+    if (candidate.source === "text") return { ...base, itemIndices: candidate.itemIndices };
+    return { ...base, bbox: candidate.bbox };
+  }
+  function renderVerdicts(query, candidates, verdicts, bestIndex, { fallback } = {}) {
     askAiPanel.innerHTML = "";
+    const plausible = verdicts.filter((v) => v.plausible && candidates[v.index - 1]);
     if (!verdicts.length) {
-      askAiPanel.textContent = "Gemini found nothing plausible among these candidates.";
+      askAiPanel.textContent = "Gemini found nothing plausible among " + candidates.length + " candidates.";
+      return;
+    }
+    if (fallback && plausible.length) {
+      S.lastResults = plausible.map((v) => resultFromCandidate(candidates[v.index - 1]));
+      S.activeResultIndex = -1;
+      renderResultsList();
+      drawHighlights();
+      askAiPanel.textContent = plausible.length + " possible match" + (plausible.length === 1 ? "" : "es") + " found \u2014 see the results list below (badged AI FOUND). Nothing is saved until you confirm one.";
+      return;
+    }
+    if (fallback) {
+      askAiPanel.textContent = "Checked " + candidates.length + ' extracted words \u2014 none plausibly matched "' + query + '".';
       return;
     }
     for (const v of verdicts) {
@@ -2769,17 +2858,17 @@
       reason.textContent = v.reason || "";
       row.appendChild(reason);
       if (v.plausible) {
-        const saveBtn = document.createElement("button");
-        saveBtn.className = "ai-save-btn";
-        saveBtn.textContent = 'Save as correction for "' + query + '"';
-        saveBtn.addEventListener("click", () => {
+        const confirmBtn = document.createElement("button");
+        confirmBtn.className = "confirm-btn";
+        confirmBtn.textContent = '\u2713 Confirm \u2014 this is "' + query + '"';
+        confirmBtn.addEventListener("click", () => {
           setCorrection(candidate.rawText, query);
           logUsageEvent("ai_verdict_accepted", { query });
-          saveBtn.textContent = 'Saved \u2014 reads as "' + query + '" from now on';
-          saveBtn.disabled = true;
+          confirmBtn.textContent = "\u2713 Confirmed";
+          confirmBtn.disabled = true;
           runFullSearch();
         });
-        row.appendChild(saveBtn);
+        row.appendChild(confirmBtn);
       }
       askAiPanel.appendChild(row);
     }
@@ -2802,9 +2891,28 @@
       askAiPanel.textContent = "AI assist unavailable right now (" + (err.message || err) + ").";
     }
   }
+  async function askAiFallback() {
+    const candidates = allWordCandidates();
+    if (!candidates.length) return;
+    const query = S.currentQuery.raw;
+    askAiPanel.hidden = false;
+    askAiPanel.textContent = "Searching everything (" + candidates.length + " words)\u2026";
+    logUsageEvent("ai_fallback_requested", { query, candidateCount: candidates.length });
+    try {
+      const { data, error } = await sb.functions.invoke("match-assist", {
+        body: { query, candidates, mode: "fallback" }
+      });
+      if (error) throw error;
+      renderVerdicts(query, candidates, data && data.verdicts || [], data && data.bestIndex, { fallback: true });
+    } catch (err) {
+      console.warn("AI fallback search failed:", err);
+      askAiPanel.textContent = "AI assist unavailable right now (" + (err.message || err) + ").";
+    }
+  }
   function initAiMatch() {
     if (!CLOUD_ENABLED) return;
     askAiBtn.addEventListener("click", askAi);
+    askAiFallbackBtn.addEventListener("click", askAiFallback);
   }
 
   // src/app/results.js
@@ -2827,8 +2935,22 @@
     const pctTitle = res.reasons && res.reasons.length ? res.reasons.join("\n") : "";
     const topRow = document.createElement("div");
     topRow.className = "result-top-row";
-    topRow.innerHTML = '<span class="badge badge-page">Page ' + res.page + '</span><span class="badge ' + (res.source === "text" ? "badge-text" : "badge-ocr") + '">' + (res.source === "text" ? "TEXT" : "OCR") + "</span>" + (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) \u2014 check the crop">GLYPH</span>' : "") + (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : "") + (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : "") + '<span class="badge badge-conf badge-conf-' + pctTier + '" title="' + escapeHtml(pctTitle) + '">' + pct + "%</span>";
+    topRow.innerHTML = '<span class="badge badge-page">Page ' + res.page + '</span><span class="badge ' + (res.source === "text" ? "badge-text" : "badge-ocr") + '">' + (res.source === "text" ? "TEXT" : "OCR") + "</span>" + (res.confused ? '<span class="badge badge-confused" title="Matched through characters OCR cannot reliably distinguish (0/O, 1/I, 5/S, 8/B, 6/G, 2/Z) \u2014 check the crop">GLYPH</span>' : "") + (res.fuzzy ? '<span class="badge badge-fuzzy">FUZZY</span>' : "") + (res.corrected ? '<span class="badge badge-fixed">CORRECTED</span>' : "") + (res.aiFound ? '<span class="badge badge-ai" title="Not found by the local matcher \u2014 found by the AI fallback search over every extracted word">AI FOUND</span>' : "") + '<span class="badge badge-conf badge-conf-' + pctTier + '" title="' + escapeHtml(pctTitle) + '">' + pct + "%</span>";
     if (res.source === "ocr") {
+      if (bandOf(res) !== "confirmed" && S.currentQuery.raw) {
+        const confirmBtn = document.createElement("button");
+        confirmBtn.className = "confirm-btn";
+        confirmBtn.textContent = "\u2713 Correct";
+        confirmBtn.title = 'Confirm this really is "' + S.currentQuery.raw + `" \u2014 teaches the shared corrections library so it's never guessed again`;
+        confirmBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          setCorrection(res.rawText, S.currentQuery.raw);
+          confirmBtn.textContent = "\u2713 Confirmed";
+          confirmBtn.disabled = true;
+          runFullSearch();
+        });
+        topRow.appendChild(confirmBtn);
+      }
       const fixBtn = document.createElement("button");
       fixBtn.className = "fix-btn";
       fixBtn.textContent = res.corrected ? "Edit fix" : "Fix text";
