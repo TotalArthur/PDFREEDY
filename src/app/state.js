@@ -20,6 +20,10 @@ const S = {
   docEpoch: 0,
   processingCancelled: false,
   isBackgroundRunning: false,
+  // True only during the automatic background rotation top-up (see
+  // queue.js) — search stays open and the full-page loading cover stays
+  // off, since that run only ever adds to pages already searchable.
+  silentTopUp: false,
   currentQuery: { raw: '', norm: '', exactOnly: false, fuzzy: false },
   tickerHandle: null,
   // Set when a search found nothing on the cheap pass and only turned results

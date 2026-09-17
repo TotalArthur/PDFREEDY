@@ -292,17 +292,19 @@ complexity for cached page data.
 
 ### Speed vs. coverage
 
-OCR runs a **single pass in the page's native orientation** by default. A large scanned
-sheet takes roughly 1–2 minutes.
+**Also scan rotated/vertical text** is on by default, and search still opens as fast as it
+always has: a page's very first pass is always the single, primary-orientation read (the
+same ~1–2 minutes a large scanned sheet always took), whatever the checkbox says. The other
+three passes (90°/180°/270°) then run automatically afterward, in the background — search
+stays open and the drawing stays uncovered the whole time, since that extra work can only
+ever add results to a page already marked searchable, never take any away. Results for a
+page keep updating live as each rotation finishes.
 
-Ticking **"Also scan rotated/vertical text"** runs four passes (0°/90°/180°/270°) and
-merges them, mapping every box back into page coordinates. This catches vertical line
-labels but takes about 4× as long. Off by default.
-
-Ticking it *after* a document has been read doesn't start over: each page tracks which
-rotations it has already had, goes back in the queue, and runs only the three it is
-missing, appending to the words it already holds. Unticking keeps that work — it just
-stops searching the rotated words, so the results on screen always match the checkbox.
+Unticking the box doesn't throw already-read rotated words away, it just stops searching
+them, so the results on screen always match the checkbox and re-ticking is free. Ticking it
+back on (or ticking it for the first time, if it was off before a document loaded) puts
+whatever pages are still missing a rotation back in the queue for just the ones they need —
+never a full re-read.
 
 Tesseract runs in `SPARSE_TEXT` mode with a character whitelist — drawings are line art
 with scattered labels, not paragraphs, and that combination measurably cut both noise and

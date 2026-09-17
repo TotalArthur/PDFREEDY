@@ -503,7 +503,7 @@
       </div>
 
       <div class="side-section" id="procStatus">
-        <label class="rotated-toggle"><input type="checkbox" id="rotatedTextToggle"> Also scan rotated/vertical text (slower)</label>
+        <label class="rotated-toggle" title="On by default. Search still opens as soon as the first pass is read — rotated/vertical text is filled in afterward, in the background, without blocking search."><input type="checkbox" id="rotatedTextToggle" checked> Also scan rotated/vertical text</label>
         <div id="procDetail"><span id="procSpinner" class="spinner"></span><span id="procDetailText">No document loaded.</span></div>
         <div id="procBarOuter"><div id="procBarInner"></div></div>
         <div class="proc-buttons">
@@ -722,6 +722,10 @@
     docEpoch: 0,
     processingCancelled: false,
     isBackgroundRunning: false,
+    // True only during the automatic background rotation top-up (see
+    // queue.js) — search stays open and the full-page loading cover stays
+    // off, since that run only ever adds to pages already searchable.
+    silentTopUp: false,
     currentQuery: { raw: "", norm: "", exactOnly: false, fuzzy: false },
     tickerHandle: null,
     // Set when a search found nothing on the cheap pass and only turned results
@@ -1791,10 +1795,10 @@
     }
     return S.ocrScheduler;
   }
-  async function runOcrForPage(pageNum, onProgress) {
+  async function runOcrForPage(pageNum, onProgress, rotationsOverride) {
     const epoch = S.docEpoch;
     const data = S.pageData.get(pageNum);
-    const wanted = rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1);
+    const wanted = rotationsOverride || (rotatedTextToggle.checked ? ROTATIONS : ROTATIONS.slice(0, 1));
     const alreadyRun = data.ocrRotations || [];
     const rotations = wanted.filter((deg) => !alreadyRun.includes(deg));
     if (!rotations.length) return data;
@@ -1909,13 +1913,16 @@
   }
 
   // src/app/queue.js
-  function startBackgroundProcessing() {
+  function startBackgroundProcessing(opts = {}) {
     const epoch = S.docEpoch;
     S.isBackgroundRunning = true;
     S.processingCancelled = false;
-    setSearchEnabled(false);
+    S.silentTopUp = !!opts.silent;
+    if (!opts.silent) {
+      setSearchEnabled(false);
+      showViewerLoading("");
+    }
     cancelProcBtn.disabled = false;
-    showViewerLoading("");
     if (!S.tickerHandle) S.tickerHandle = setInterval(updateProcSummary, 500);
     runQueue(epoch);
   }
@@ -1955,6 +1962,22 @@
     skipPageBtn.disabled = true;
     setSearchEnabled(S.numPages > 0);
     if (S.currentQuery.norm) updateSearchSummary();
+    if (rotatedTextToggle.checked) {
+      const queued = queueMissingRotationPages();
+      if (queued) startBackgroundProcessing({ silent: true });
+    }
+  }
+  function queueMissingRotationPages() {
+    let queued = 0;
+    for (let p = 1; p <= S.numPages; p++) {
+      const d = S.pageData.get(p);
+      if (!d || d.status !== "ocr-done") continue;
+      const seen = d.ocrRotations || [];
+      if (ROTATIONS.every((deg) => seen.includes(deg))) continue;
+      d.status = "pending";
+      queued++;
+    }
+    return queued;
   }
   async function processPage(pageNum, epoch) {
     const data = S.pageData.get(pageNum);
@@ -1981,6 +2004,7 @@
         skipPageBtn.disabled = false;
         updatePageBadge();
       }
+      const isFirstOcrPass = !(data.ocrRotations && data.ocrRotations.length);
       try {
         await runOcrForPage(pageNum, (pass, of) => {
           data.ocrProgressLabel = "OCR pass " + pass + " of " + of;
@@ -1988,7 +2012,7 @@
           data.ocrPassOf = of;
           data.stepStartedAt = Date.now();
           updateProcSummary();
-        });
+        }, isFirstOcrPass ? ROTATIONS.slice(0, 1) : void 0);
         data.status = data.skipRequested ? "skipped" : "ocr-done";
       } catch (err) {
         console.error("OCR failed on page", pageNum, err);
@@ -2039,12 +2063,14 @@
     if (anyActive && cd && cd.status === "ocr-running" && cd.ocrProgressLabel) {
       const elapsed = Math.round((Date.now() - (cd.stepStartedAt || Date.now())) / 1e3);
       label += " \u2014 page " + S.currentPage + ": " + cd.ocrProgressLabel + " (running " + elapsed + "s)";
-      showViewerLoading("Page " + S.currentPage + " of " + S.numPages + ": " + cd.ocrProgressLabel + " \u2014 running " + elapsed + "s");
+      if (!S.silentTopUp) {
+        showViewerLoading("Page " + S.currentPage + " of " + S.numPages + ": " + cd.ocrProgressLabel + " \u2014 running " + elapsed + "s");
+      }
     } else if (anyActive && cd && cd.status === "text-extracting") {
       label += " \u2014 page " + S.currentPage + ": extracting text";
-      showViewerLoading("Page " + S.currentPage + " of " + S.numPages + ": extracting text");
+      if (!S.silentTopUp) showViewerLoading("Page " + S.currentPage + " of " + S.numPages + ": extracting text");
     } else if (anyActive) {
-      showViewerLoading("");
+      if (!S.silentTopUp) showViewerLoading("");
     }
     if (allDone) label += " \u2014 done, ready to search";
     else if (!anyActive) label += " \u2014 stopped";
@@ -2074,15 +2100,7 @@
       if (S.currentQuery.norm) runFullSearch();
       return;
     }
-    let queued = 0;
-    for (let p = 1; p <= S.numPages; p++) {
-      const d = S.pageData.get(p);
-      if (!d || d.status !== "ocr-done") continue;
-      const seen = d.ocrRotations || [];
-      if (ROTATIONS.every((deg) => seen.includes(deg))) continue;
-      d.status = "pending";
-      queued++;
-    }
+    const queued = queueMissingRotationPages();
     if (!queued) {
       if (S.currentQuery.norm) runFullSearch();
       return;
