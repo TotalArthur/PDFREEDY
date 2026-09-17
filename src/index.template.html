@@ -31,6 +31,14 @@
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<!--
+  Supabase client — powers the optional cloud features (accounts, shared OCR
+  corrections library, saved projects, AI-assisted matching). Exposes a
+  window.supabase global, same CDN-global pattern as the three scripts
+  above. If src/app/supabaseConfig.js is left blank, this is loaded but
+  never used — the app stays fully local.
+-->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
 <style>
   :root {
@@ -379,6 +387,70 @@
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: #3a3d42; border-radius: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---------- Auth / projects overlays ---------- */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 200; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(10,14,20,.82); backdrop-filter: blur(2px);
+  }
+  .modal-overlay[hidden] { display: none; }
+  .modal-card {
+    width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+  }
+  .modal-card h2 { margin: 0 0 4px; font-size: 17px; }
+  .modal-card .auth-sub { color: var(--text-dim); font-size: 12.5px; margin: 0 0 16px; }
+  .modal-card input[type=email], .modal-card input[type=password], .modal-card input[type=text] {
+    width: 100%; padding: 9px 10px; margin-bottom: 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 13px;
+  }
+  .auth-error { color: var(--bad); font-size: 12px; margin-bottom: 10px; line-height: 1.4; }
+  .auth-buttons { display: flex; gap: 8px; }
+  .modal-card button {
+    padding: 8px 12px; border-radius: 6px; border: none; background: var(--accent);
+    color: #08131f; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  .modal-card button.secondary {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); font-weight: 500;
+  }
+  .modal-card p { font-size: 13px; line-height: 1.5; color: var(--text); }
+
+  .user-badge { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+  .badge-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 5px; font-size: 11.5px; padding: 4px 9px; cursor: pointer;
+  }
+  .badge-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  #projectsOverlay .modal-card { width: 420px; }
+  .project-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .project-meta { flex: 1; min-width: 0; }
+  .project-name { font-size: 13px; font-weight: 600; }
+  .project-sub { font-size: 11px; color: var(--text-dim); }
+  .project-btns { display: flex; gap: 6px; flex-shrink: 0; }
+  .project-btns button { padding: 5px 9px; font-size: 11.5px; }
+  .project-save-row { display: flex; gap: 6px; margin-bottom: 12px; }
+  .project-save-row input { margin-bottom: 0; flex: 1; }
+  #projectsStatus { font-size: 12px; color: var(--text-dim); margin-top: 8px; min-height: 14px; }
+  .modal-close-row { display: flex; justify-content: flex-end; margin-top: 14px; }
+
+  /* ---------- Ask AI ---------- */
+  #askAiBtn {
+    margin-top: 8px; padding: 6px 10px; font-size: 12px; border-radius: 6px;
+    border: 1px solid var(--accent-dim); background: var(--panel-2); color: var(--accent);
+    cursor: pointer;
+  }
+  #askAiBtn:hover { background: #1c3450; }
+  #askAiPanel {
+    margin-top: 8px; padding: 10px; border-radius: 8px; background: var(--panel-2);
+    border: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; color: var(--text);
+    white-space: pre-wrap;
+  }
 </style>
 </head>
 <body>
@@ -388,6 +460,11 @@
     <h1>P&amp;ID Tag Finder</h1>
     <div class="privacy-note">&#128274; Private property of Arthur Dickson — not for use without express permission.</div>
     <div class="file-controls">
+      <div id="userBadge" class="user-badge" hidden>
+        <span id="userEmailLabel"></span>
+        <button id="projectsBtn" class="badge-btn" hidden>Projects</button>
+        <button id="signOutBtn" class="badge-btn">Sign out</button>
+      </div>
       <span id="fileInfo"></span>
       <input type="file" id="fileInput" accept="application/pdf,.pdf">
       <label class="file-btn" for="fileInput">
@@ -412,6 +489,8 @@
           <label title="A last-resort tier, listed below everything else, best-read first."><input type="checkbox" id="fuzzyToggle" checked> Fuzzy (last-resort, may over-match)</label>
         </div>
         <div id="searchSummary"></div>
+        <button id="askAiBtn" hidden title="Send the query and the ambiguous OCR reads (text only, never the PDF) to an AI for a second opinion">&#10024; Ask AI about the uncertain matches</button>
+        <div id="askAiPanel" hidden></div>
       </div>
 
       <div class="side-section" id="procStatus">
@@ -507,6 +586,47 @@
     <div class="drop-icon">&#128196;</div>
     <b>Drop your PDF here</b>
     <span>Release to load the drawing</span>
+  </div>
+</div>
+
+<div id="authOverlay" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <h2>PDFreedy</h2>
+    <p class="auth-sub">Private property of Arthur Dickson — sign in to continue.</p>
+
+    <div id="authForm">
+      <input type="email" id="authEmail" placeholder="Email" autocomplete="email">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+      <div id="authError" class="auth-error" hidden></div>
+      <div class="auth-buttons">
+        <button id="authSignInBtn">Sign in</button>
+        <button id="authSignUpBtn" class="secondary">Create account</button>
+      </div>
+    </div>
+
+    <div id="authPending" hidden>
+      <p>Signed in as <b id="authPendingEmail"></b>, but this account hasn't been approved for access yet. Check back once you hear from Arthur.</p>
+      <button id="authSignOutFromPendingBtn" class="secondary">Sign out</button>
+    </div>
+
+    <div id="authRevoked" hidden>
+      <p>Access for this account has been revoked.</p>
+      <button id="authSignOutFromRevokedBtn" class="secondary">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<div id="projectsOverlay" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <h2>Projects</h2>
+    <p class="auth-sub">PDFs saved here are uploaded to your account's cloud storage.</p>
+    <div class="project-save-row">
+      <input type="text" id="projectNameInput" placeholder="Name for the currently open PDF">
+      <button id="saveProjectBtn">Save</button>
+    </div>
+    <div id="projectsList"></div>
+    <div id="projectsStatus"></div>
+    <div class="modal-close-row"><button id="projectsCloseBtn" class="secondary">Close</button></div>
   </div>
 </div>
 

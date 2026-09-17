@@ -16,9 +16,21 @@ is built from them — see [Developing](#developing).
 
 ## Privacy
 
-The PDF you open is read in your browser via `FileReader` and never leaves your machine —
-nothing is uploaded to any server, including when this page is hosted on GitHub Pages.
-Only the two libraries (pdf.js and tesseract.js) are fetched from a public CDN.
+By default, the PDF you open is read in your browser via `FileReader` and never leaves your
+machine — nothing is uploaded anywhere, including when this page is hosted on GitHub Pages.
+Only three libraries (pdf.js, pdf-lib and tesseract.js) are fetched from a public CDN.
+
+This build also has an **optional** cloud layer (Supabase — see
+[docs/supabase-setup.md](docs/supabase-setup.md)) that adds accounts, a shared OCR-correction
+library, cloud-saved projects and AI-assisted matching for uncertain reads. It stays off
+entirely — the app is 100% local, no different from the paragraph above — until
+`src/app/supabaseConfig.js` is filled in with a project URL and key. Once it's on:
+
+- Signing in and being **approved** is required to use the app at all (see below).
+- A PDF is only ever uploaded when you explicitly click **Save** in the Projects panel —
+  opening/searching a PDF locally still never sends it anywhere.
+- The AI-assist feature sends only short OCR text strings and confidence numbers to a
+  Supabase Edge Function (which relays them to Gemini) — never the PDF or a page image.
 
 > Private property of Arthur Dickson — not for use without express permission.
 

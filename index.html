@@ -31,6 +31,14 @@
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<!--
+  Supabase client — powers the optional cloud features (accounts, shared OCR
+  corrections library, saved projects, AI-assisted matching). Exposes a
+  window.supabase global, same CDN-global pattern as the three scripts
+  above. If src/app/supabaseConfig.js is left blank, this is loaded but
+  never used — the app stays fully local.
+-->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
 <style>
   :root {
@@ -379,6 +387,70 @@
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: #3a3d42; border-radius: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---------- Auth / projects overlays ---------- */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 200; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(10,14,20,.82); backdrop-filter: blur(2px);
+  }
+  .modal-overlay[hidden] { display: none; }
+  .modal-card {
+    width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+  }
+  .modal-card h2 { margin: 0 0 4px; font-size: 17px; }
+  .modal-card .auth-sub { color: var(--text-dim); font-size: 12.5px; margin: 0 0 16px; }
+  .modal-card input[type=email], .modal-card input[type=password], .modal-card input[type=text] {
+    width: 100%; padding: 9px 10px; margin-bottom: 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 13px;
+  }
+  .auth-error { color: var(--bad); font-size: 12px; margin-bottom: 10px; line-height: 1.4; }
+  .auth-buttons { display: flex; gap: 8px; }
+  .modal-card button {
+    padding: 8px 12px; border-radius: 6px; border: none; background: var(--accent);
+    color: #08131f; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  .modal-card button.secondary {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); font-weight: 500;
+  }
+  .modal-card p { font-size: 13px; line-height: 1.5; color: var(--text); }
+
+  .user-badge { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+  .badge-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 5px; font-size: 11.5px; padding: 4px 9px; cursor: pointer;
+  }
+  .badge-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  #projectsOverlay .modal-card { width: 420px; }
+  .project-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .project-meta { flex: 1; min-width: 0; }
+  .project-name { font-size: 13px; font-weight: 600; }
+  .project-sub { font-size: 11px; color: var(--text-dim); }
+  .project-btns { display: flex; gap: 6px; flex-shrink: 0; }
+  .project-btns button { padding: 5px 9px; font-size: 11.5px; }
+  .project-save-row { display: flex; gap: 6px; margin-bottom: 12px; }
+  .project-save-row input { margin-bottom: 0; flex: 1; }
+  #projectsStatus { font-size: 12px; color: var(--text-dim); margin-top: 8px; min-height: 14px; }
+  .modal-close-row { display: flex; justify-content: flex-end; margin-top: 14px; }
+
+  /* ---------- Ask AI ---------- */
+  #askAiBtn {
+    margin-top: 8px; padding: 6px 10px; font-size: 12px; border-radius: 6px;
+    border: 1px solid var(--accent-dim); background: var(--panel-2); color: var(--accent);
+    cursor: pointer;
+  }
+  #askAiBtn:hover { background: #1c3450; }
+  #askAiPanel {
+    margin-top: 8px; padding: 10px; border-radius: 8px; background: var(--panel-2);
+    border: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; color: var(--text);
+    white-space: pre-wrap;
+  }
 </style>
 </head>
 <body>
@@ -388,6 +460,11 @@
     <h1>P&amp;ID Tag Finder</h1>
     <div class="privacy-note">&#128274; Private property of Arthur Dickson — not for use without express permission.</div>
     <div class="file-controls">
+      <div id="userBadge" class="user-badge" hidden>
+        <span id="userEmailLabel"></span>
+        <button id="projectsBtn" class="badge-btn" hidden>Projects</button>
+        <button id="signOutBtn" class="badge-btn">Sign out</button>
+      </div>
       <span id="fileInfo"></span>
       <input type="file" id="fileInput" accept="application/pdf,.pdf">
       <label class="file-btn" for="fileInput">
@@ -412,6 +489,8 @@
           <label title="A last-resort tier, listed below everything else, best-read first."><input type="checkbox" id="fuzzyToggle" checked> Fuzzy (last-resort, may over-match)</label>
         </div>
         <div id="searchSummary"></div>
+        <button id="askAiBtn" hidden title="Send the query and the ambiguous OCR reads (text only, never the PDF) to an AI for a second opinion">&#10024; Ask AI about the uncertain matches</button>
+        <div id="askAiPanel" hidden></div>
       </div>
 
       <div class="side-section" id="procStatus">
@@ -507,6 +586,47 @@
     <div class="drop-icon">&#128196;</div>
     <b>Drop your PDF here</b>
     <span>Release to load the drawing</span>
+  </div>
+</div>
+
+<div id="authOverlay" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <h2>PDFreedy</h2>
+    <p class="auth-sub">Private property of Arthur Dickson — sign in to continue.</p>
+
+    <div id="authForm">
+      <input type="email" id="authEmail" placeholder="Email" autocomplete="email">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password">
+      <div id="authError" class="auth-error" hidden></div>
+      <div class="auth-buttons">
+        <button id="authSignInBtn">Sign in</button>
+        <button id="authSignUpBtn" class="secondary">Create account</button>
+      </div>
+    </div>
+
+    <div id="authPending" hidden>
+      <p>Signed in as <b id="authPendingEmail"></b>, but this account hasn't been approved for access yet. Check back once you hear from Arthur.</p>
+      <button id="authSignOutFromPendingBtn" class="secondary">Sign out</button>
+    </div>
+
+    <div id="authRevoked" hidden>
+      <p>Access for this account has been revoked.</p>
+      <button id="authSignOutFromRevokedBtn" class="secondary">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<div id="projectsOverlay" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <h2>Projects</h2>
+    <p class="auth-sub">PDFs saved here are uploaded to your account's cloud storage.</p>
+    <div class="project-save-row">
+      <input type="text" id="projectNameInput" placeholder="Name for the currently open PDF">
+      <button id="saveProjectBtn">Save</button>
+    </div>
+    <div id="projectsList"></div>
+    <div id="projectsStatus"></div>
+    <div class="modal-close-row"><button id="projectsCloseBtn" class="secondary">Close</button></div>
   </div>
 </div>
 
@@ -619,7 +739,13 @@
     // detach/transfer the ArrayBuffer it's handed. Needed at export time to
     // load the original PDF into pdf-lib for burning in markups.
     rawFileBytes: null,
-    fileName: ""
+    fileName: "",
+    // Cloud (Supabase) account state. Both stay null in local-only mode, or
+    // before sign-in completes.
+    user: null,
+    // Supabase auth user object
+    profile: null
+    // { id, email, status, is_admin } row from public.profiles
   };
   if (typeof window !== "undefined") window.__pdfreedyState = S;
 
@@ -649,6 +775,24 @@
     return (s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
 
+  // src/app/supabaseConfig.js
+  var SUPABASE_URL = "";
+  var SUPABASE_ANON_KEY = "";
+
+  // src/app/supabaseClient.js
+  var CLOUD_ENABLED = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
+  var sb = null;
+  if (CLOUD_ENABLED) {
+    try {
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: true, autoRefreshToken: true }
+      });
+    } catch (err) {
+      console.warn("Supabase client failed to initialize \u2014 running in local-only mode:", err);
+      sb = null;
+    }
+  }
+
   // src/app/corrections.js
   var CORRECTIONS_KEY = "pidTagFinder.ocrCorrections.v1";
   var corrections = /* @__PURE__ */ new Map();
@@ -670,10 +814,41 @@
   function setCorrection(rawText, correctedText) {
     const key = normalize(rawText);
     if (!key) return;
-    if (!correctedText || normalize(correctedText) === key) corrections.delete(key);
+    const cleared = !correctedText || normalize(correctedText) === key;
+    if (cleared) corrections.delete(key);
     else corrections.set(key, correctedText);
     saveCorrections();
     updateCorrectionsBar();
+    if (!cleared) pushCorrectionToCloud(key, correctedText);
+  }
+  async function pullSharedCorrections() {
+    if (!CLOUD_ENABLED || !sb || !S.user) return;
+    const { data, error } = await sb.from("corrections").select("raw_key,corrected");
+    if (error) {
+      console.warn("Could not load shared corrections:", error);
+      return;
+    }
+    let changed = false;
+    for (const row of data) {
+      if (!corrections.has(row.raw_key)) {
+        corrections.set(row.raw_key, row.corrected);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveCorrections();
+      updateCorrectionsBar();
+    }
+    const known = new Set(data.map((r) => r.raw_key));
+    for (const [key, corrected] of corrections) {
+      if (!known.has(key)) pushCorrectionToCloud(key, corrected);
+    }
+  }
+  function pushCorrectionToCloud(rawKey, corrected) {
+    if (!CLOUD_ENABLED || !sb || !S.user) return;
+    sb.from("corrections").upsert({ raw_key: rawKey, corrected, created_by: S.user.id }, { onConflict: "raw_key" }).then(({ error }) => {
+      if (error) console.warn("Could not save correction to shared library:", error);
+    });
   }
   function getCorrection(rawText) {
     return corrections.get(normalize(rawText)) || null;
@@ -2554,6 +2729,57 @@
     }
   }
 
+  // src/app/usage.js
+  function logUsageEvent(eventType, metadata = {}) {
+    if (!CLOUD_ENABLED || !sb || !S.user) return;
+    sb.from("usage_events").insert({ user_id: S.user.id, event_type: eventType, metadata }).then(({ error }) => {
+      if (error) console.warn("usage_events insert failed:", error);
+    });
+  }
+
+  // src/app/aiMatch.js
+  var $2 = (id) => document.getElementById(id);
+  var askAiBtn = $2("askAiBtn");
+  var askAiPanel = $2("askAiPanel");
+  function possibleCandidates() {
+    return S.lastResults.filter((r) => bandOf(r) === "possible").slice(0, 8).map((r) => ({
+      page: r.page,
+      text: r.text,
+      rawText: r.rawText || r.text,
+      confidence: typeof r.confidence === "number" ? r.confidence : null
+    }));
+  }
+  function updateAskAiVisibility() {
+    if (!CLOUD_ENABLED || !sb || !S.user) {
+      askAiBtn.hidden = true;
+      return;
+    }
+    const candidates = possibleCandidates();
+    askAiBtn.hidden = candidates.length === 0;
+    askAiPanel.hidden = true;
+  }
+  async function askAi() {
+    const candidates = possibleCandidates();
+    if (!candidates.length) return;
+    askAiPanel.hidden = false;
+    askAiPanel.textContent = "Asking\u2026";
+    logUsageEvent("ai_match_requested", { query: S.currentQuery.raw, candidateCount: candidates.length });
+    try {
+      const { data, error } = await sb.functions.invoke("match-assist", {
+        body: { query: S.currentQuery.raw, candidates }
+      });
+      if (error) throw error;
+      askAiPanel.textContent = data && data.answer || "No response.";
+    } catch (err) {
+      console.warn("AI match-assist failed:", err);
+      askAiPanel.textContent = "AI assist unavailable right now (" + (err.message || err) + ").";
+    }
+  }
+  function initAiMatch() {
+    if (!CLOUD_ENABLED) return;
+    askAiBtn.addEventListener("click", askAi);
+  }
+
   // src/app/results.js
   function buildResultElement(res, i) {
     const el = document.createElement("div");
@@ -2629,6 +2855,7 @@
   }
   function renderResultsList() {
     resultsList.innerHTML = "";
+    updateAskAiVisibility();
     if (!S.lastResults.length) {
       const note = document.createElement("div");
       note.className = "empty-note";
@@ -3507,6 +3734,224 @@
     if (S.currentQuery.norm) runFullSearch();
   });
 
+  // src/app/auth.js
+  var $3 = (id) => document.getElementById(id);
+  var authOverlay = $3("authOverlay");
+  var authForm = $3("authForm");
+  var authEmail = $3("authEmail");
+  var authPassword = $3("authPassword");
+  var authError = $3("authError");
+  var authSignInBtn = $3("authSignInBtn");
+  var authSignUpBtn = $3("authSignUpBtn");
+  var authPending = $3("authPending");
+  var authPendingEmail = $3("authPendingEmail");
+  var authRevoked = $3("authRevoked");
+  var authSignOutFromPendingBtn = $3("authSignOutFromPendingBtn");
+  var authSignOutFromRevokedBtn = $3("authSignOutFromRevokedBtn");
+  var userBadge = $3("userBadge");
+  var userEmailLabel = $3("userEmailLabel");
+  var signOutBtn = $3("signOutBtn");
+  var projectsBtn = $3("projectsBtn");
+  var authReadyListeners = [];
+  function onAuthReady(fn) {
+    authReadyListeners.push(fn);
+  }
+  function showError(msg) {
+    authError.textContent = msg;
+    authError.hidden = !msg;
+  }
+  function showGateState(state) {
+    authForm.hidden = state !== "form";
+    authPending.hidden = state !== "pending";
+    authRevoked.hidden = state !== "revoked";
+    authOverlay.hidden = state === "unlocked";
+    userBadge.hidden = state !== "unlocked";
+    projectsBtn.hidden = state !== "unlocked";
+  }
+  async function fetchProfile(userId) {
+    const { data, error } = await sb.from("profiles").select("id,email,status,is_admin").eq("id", userId).single();
+    if (error) {
+      console.warn("Could not load profile:", error);
+      return null;
+    }
+    return data;
+  }
+  async function applySession(session) {
+    if (!session) {
+      S.user = null;
+      S.profile = null;
+      showGateState("form");
+      return;
+    }
+    S.user = session.user;
+    const profile = await fetchProfile(session.user.id);
+    S.profile = profile;
+    if (!profile || profile.status === "pending") {
+      authPendingEmail.textContent = session.user.email;
+      showGateState("pending");
+      return;
+    }
+    if (profile.status === "revoked") {
+      showGateState("revoked");
+      return;
+    }
+    userEmailLabel.textContent = session.user.email + (profile.is_admin ? " (admin)" : "");
+    showGateState("unlocked");
+    logUsageEvent("session_start");
+    for (const fn of authReadyListeners) fn(S.user, S.profile);
+  }
+  async function signIn() {
+    showError("");
+    const { error } = await sb.auth.signInWithPassword({ email: authEmail.value.trim(), password: authPassword.value });
+    if (error) showError(error.message);
+  }
+  async function signUp() {
+    showError("");
+    const { error } = await sb.auth.signUp({ email: authEmail.value.trim(), password: authPassword.value });
+    if (error) {
+      showError(error.message);
+      return;
+    }
+    showError("Account created. If approval is required you'll see a pending screen after signing in.");
+  }
+  async function signOut() {
+    await sb.auth.signOut();
+  }
+  function initAuth() {
+    if (!CLOUD_ENABLED) {
+      authOverlay.hidden = true;
+      userBadge.hidden = true;
+      projectsBtn.hidden = true;
+      for (const fn of authReadyListeners) fn(null, null);
+      return;
+    }
+    authSignInBtn.addEventListener("click", signIn);
+    authSignUpBtn.addEventListener("click", signUp);
+    authSignOutFromPendingBtn.addEventListener("click", signOut);
+    authSignOutFromRevokedBtn.addEventListener("click", signOut);
+    signOutBtn.addEventListener("click", signOut);
+    authPassword.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") signIn();
+    });
+    sb.auth.onAuthStateChange((_event, session) => {
+      applySession(session);
+    });
+    sb.auth.getSession().then(({ data }) => applySession(data.session));
+  }
+
+  // src/app/projects.js
+  var BUCKET = "pdfs";
+  var $4 = (id) => document.getElementById(id);
+  var projectsBtn2 = $4("projectsBtn");
+  var projectsOverlay = $4("projectsOverlay");
+  var projectsCloseBtn = $4("projectsCloseBtn");
+  var projectsList = $4("projectsList");
+  var saveProjectBtn = $4("saveProjectBtn");
+  var projectNameInput = $4("projectNameInput");
+  var projectsStatus = $4("projectsStatus");
+  function setStatus(msg) {
+    projectsStatus.textContent = msg || "";
+  }
+  async function saveCurrentAsProject() {
+    if (!CLOUD_ENABLED || !sb || !S.user) return;
+    if (!S.rawFileBytes || !S.fileName) {
+      setStatus("Open a PDF first.");
+      return;
+    }
+    const name = projectNameInput.value.trim() || S.fileName;
+    setStatus("Saving\u2026");
+    try {
+      const { data: project, error: projErr } = await sb.from("projects").insert({ user_id: S.user.id, name }).select().single();
+      if (projErr) throw projErr;
+      const path = S.user.id + "/" + project.id + "/" + S.fileName;
+      const blob = new Blob([S.rawFileBytes], { type: "application/pdf" });
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(path, blob, { upsert: true });
+      if (upErr) throw upErr;
+      const { error: fileErr } = await sb.from("project_files").insert({ project_id: project.id, storage_path: path, filename: S.fileName });
+      if (fileErr) throw fileErr;
+      logUsageEvent("project_saved", { project_id: project.id });
+      setStatus("Saved.");
+      projectNameInput.value = "";
+      await refreshProjectsList();
+    } catch (err) {
+      console.warn("Save to cloud failed:", err);
+      setStatus("Save failed: " + (err.message || err));
+    }
+  }
+  async function refreshProjectsList() {
+    projectsList.innerHTML = '<div class="empty-note">Loading\u2026</div>';
+    const { data: projects, error } = await sb.from("projects").select("id,name,created_at,project_files(id,storage_path,filename)").order("created_at", { ascending: false });
+    if (error) {
+      projectsList.innerHTML = '<div class="empty-note">Could not load projects.</div>';
+      return;
+    }
+    if (!projects.length) {
+      projectsList.innerHTML = '<div class="empty-note">No saved projects yet.</div>';
+      return;
+    }
+    projectsList.innerHTML = "";
+    for (const p of projects) {
+      const row = document.createElement("div");
+      row.className = "project-row";
+      const file = p.project_files && p.project_files[0];
+      const meta = document.createElement("div");
+      meta.className = "project-meta";
+      meta.innerHTML = '<div class="project-name"></div><div class="project-sub"></div>';
+      meta.querySelector(".project-name").textContent = p.name;
+      meta.querySelector(".project-sub").textContent = new Date(p.created_at).toLocaleString() + (file ? "" : " \u2014 no file attached");
+      row.appendChild(meta);
+      const btnRow = document.createElement("div");
+      btnRow.className = "project-btns";
+      if (file) {
+        const openBtn = document.createElement("button");
+        openBtn.textContent = "Open";
+        openBtn.addEventListener("click", () => openProjectFile(file));
+        btnRow.appendChild(openBtn);
+      }
+      const delBtn = document.createElement("button");
+      delBtn.className = "cancel";
+      delBtn.textContent = "Delete";
+      delBtn.addEventListener("click", () => deleteProject(p, file));
+      btnRow.appendChild(delBtn);
+      row.appendChild(btnRow);
+      projectsList.appendChild(row);
+    }
+  }
+  async function openProjectFile(file) {
+    setStatus("Downloading\u2026");
+    const { data, error } = await sb.storage.from(BUCKET).download(file.storage_path);
+    if (error) {
+      setStatus("Download failed: " + error.message);
+      return;
+    }
+    const pdfFile = new File([data], file.filename, { type: "application/pdf" });
+    projectsOverlay.hidden = true;
+    await loadPdf(pdfFile);
+    setStatus("");
+  }
+  async function deleteProject(project, file) {
+    if (!window.confirm('Delete "' + project.name + '"? This cannot be undone.')) return;
+    if (file) await sb.storage.from(BUCKET).remove([file.storage_path]);
+    const { error } = await sb.from("projects").delete().eq("id", project.id);
+    if (error) {
+      setStatus("Delete failed: " + error.message);
+      return;
+    }
+    await refreshProjectsList();
+  }
+  function initProjects() {
+    if (!CLOUD_ENABLED) return;
+    projectsBtn2.addEventListener("click", () => {
+      projectsOverlay.hidden = false;
+      setStatus("");
+      refreshProjectsList();
+    });
+    projectsCloseBtn.addEventListener("click", () => {
+      projectsOverlay.hidden = true;
+    });
+    saveProjectBtn.addEventListener("click", saveCurrentAsProject);
+  }
+
   // src/app/export.js
   function hexToRgb01(hex) {
     const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
@@ -3576,6 +4021,12 @@
   });
   loadCorrections();
   updateCorrectionsBar();
+  initProjects();
+  initAiMatch();
+  onAuthReady(() => {
+    pullSharedCorrections();
+  });
+  initAuth();
 })();
 
 </script>

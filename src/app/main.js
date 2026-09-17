@@ -3,8 +3,11 @@
 // registration, so the import cycles between them resolve at call time.
 import { clearCorrectionsBtn } from './dom.js';
 import { S } from './state.js';
-import { loadCorrections, updateCorrectionsBar, clearCorrections } from './corrections.js';
+import { loadCorrections, updateCorrectionsBar, clearCorrections, pullSharedCorrections } from './corrections.js';
 import { runFullSearch } from './search.js';
+import { initAuth, onAuthReady } from './auth.js';
+import { initProjects } from './projects.js';
+import { initAiMatch } from './aiMatch.js';
 import './pdf.js';
 import './queue.js';
 import './results.js';
@@ -22,3 +25,10 @@ clearCorrectionsBtn.addEventListener('click', () => {
 
 loadCorrections();
 updateCorrectionsBar();
+
+initProjects();
+initAiMatch();
+onAuthReady(() => {
+  pullSharedCorrections();
+});
+initAuth();

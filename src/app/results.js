@@ -8,6 +8,7 @@ import { getPageProxy } from './pdf.js';
 import { runFullSearch } from './search.js';
 import { jumpToResult } from './viewer.js';
 import { startAutoTrace, pageHasVectorLines } from './autotrace.js';
+import { updateAskAiVisibility } from './aiMatch.js';
 import {
   resultsList,
 } from './dom.js';
@@ -127,6 +128,7 @@ function compareResults(a, b) {
 
 function renderResultsList() {
   resultsList.innerHTML = '';
+  updateAskAiVisibility();
   if (!S.lastResults.length) {
     const note = document.createElement('div');
     note.className = 'empty-note';

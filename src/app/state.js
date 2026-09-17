@@ -40,6 +40,11 @@ const S = {
   // load the original PDF into pdf-lib for burning in markups.
   rawFileBytes: null,
   fileName: '',
+
+  // Cloud (Supabase) account state. Both stay null in local-only mode, or
+  // before sign-in completes.
+  user: null,       // Supabase auth user object
+  profile: null,    // { id, email, status, is_admin } row from public.profiles
 };
 
 // Test-only observability hook (see tests/e2e.test.mjs, tests/e2e-markup.test.mjs):
