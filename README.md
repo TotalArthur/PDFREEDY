@@ -26,7 +26,9 @@ library, cloud-saved projects and AI-assisted matching for uncertain reads. It s
 entirely — the app is 100% local, no different from the paragraph above — until
 `src/app/supabaseConfig.js` is filled in with a project URL and key. Once it's on:
 
-- Signing in and being **approved** is required to use the app at all (see below).
+- Signing in is optional — search, OCR, markup and export all still work fully signed
+  out. Being **approved** unlocks the cloud extras: shared OCR corrections, cloud-saved
+  projects and AI-assist.
 - A PDF is only ever uploaded when you explicitly click **Save** in the Projects panel —
   opening/searching a PDF locally still never sends it anywhere.
 - The AI-assist feature sends only short OCR text strings and confidence numbers to a

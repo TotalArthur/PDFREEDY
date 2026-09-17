@@ -463,7 +463,8 @@
       <div id="userBadge" class="user-badge" hidden>
         <span id="userEmailLabel"></span>
         <button id="projectsBtn" class="badge-btn" hidden>Projects</button>
-        <button id="signOutBtn" class="badge-btn">Sign out</button>
+        <button id="signInBtn" class="badge-btn" hidden>Sign in</button>
+        <button id="signOutBtn" class="badge-btn" hidden>Sign out</button>
       </div>
       <span id="fileInfo"></span>
       <input type="file" id="fileInput" accept="application/pdf,.pdf">
@@ -589,10 +590,18 @@
   </div>
 </div>
 
+<!--
+  Signing in is optional and never blocks the local tool — search, OCR,
+  markup and export all work fully signed out. It only unlocks the cloud
+  extras (shared corrections, cloud projects, AI-assist), and only once the
+  account is approved (see docs/supabase-setup.md). This overlay is a normal
+  dismissible dialog, not a gate: it opens from the header's "Sign in"
+  button and closes on its own X, same as the Projects panel below.
+-->
 <div id="authOverlay" class="modal-overlay" hidden>
   <div class="modal-card">
-    <h2>PDFreedy</h2>
-    <p class="auth-sub">Private property of Arthur Dickson — sign in to continue.</p>
+    <h2>Sign in</h2>
+    <p class="auth-sub">Unlocks shared OCR corrections, cloud-saved projects and AI-assisted matching. Local search/markup/export work either way.</p>
 
     <div id="authForm">
       <input type="email" id="authEmail" placeholder="Email" autocomplete="email">
@@ -604,15 +613,7 @@
       </div>
     </div>
 
-    <div id="authPending" hidden>
-      <p>Signed in as <b id="authPendingEmail"></b>, but this account hasn't been approved for access yet. Check back once you hear from Arthur.</p>
-      <button id="authSignOutFromPendingBtn" class="secondary">Sign out</button>
-    </div>
-
-    <div id="authRevoked" hidden>
-      <p>Access for this account has been revoked.</p>
-      <button id="authSignOutFromRevokedBtn" class="secondary">Sign out</button>
-    </div>
+    <div class="modal-close-row"><button id="authCloseBtn" class="secondary">Close</button></div>
   </div>
 </div>
 
@@ -776,8 +777,8 @@
   }
 
   // src/app/supabaseConfig.js
-  var SUPABASE_URL = "";
-  var SUPABASE_ANON_KEY = "";
+  var SUPABASE_URL = "https://oixeiotnwosvdatequkv.supabase.co";
+  var SUPABASE_ANON_KEY = "sb_publishable_IBMvu5xBhOpW1RfSpTMf7A_7vB-26vK";
 
   // src/app/supabaseClient.js
   var CLOUD_ENABLED = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -3737,19 +3738,15 @@
   // src/app/auth.js
   var $3 = (id) => document.getElementById(id);
   var authOverlay = $3("authOverlay");
-  var authForm = $3("authForm");
   var authEmail = $3("authEmail");
   var authPassword = $3("authPassword");
   var authError = $3("authError");
   var authSignInBtn = $3("authSignInBtn");
   var authSignUpBtn = $3("authSignUpBtn");
-  var authPending = $3("authPending");
-  var authPendingEmail = $3("authPendingEmail");
-  var authRevoked = $3("authRevoked");
-  var authSignOutFromPendingBtn = $3("authSignOutFromPendingBtn");
-  var authSignOutFromRevokedBtn = $3("authSignOutFromRevokedBtn");
+  var authCloseBtn = $3("authCloseBtn");
   var userBadge = $3("userBadge");
   var userEmailLabel = $3("userEmailLabel");
+  var signInBtn = $3("signInBtn");
   var signOutBtn = $3("signOutBtn");
   var projectsBtn = $3("projectsBtn");
   var authReadyListeners = [];
@@ -3760,13 +3757,22 @@
     authError.textContent = msg;
     authError.hidden = !msg;
   }
-  function showGateState(state) {
-    authForm.hidden = state !== "form";
-    authPending.hidden = state !== "pending";
-    authRevoked.hidden = state !== "revoked";
-    authOverlay.hidden = state === "unlocked";
-    userBadge.hidden = state !== "unlocked";
-    projectsBtn.hidden = state !== "unlocked";
+  function openAuthOverlay() {
+    showError("");
+    authOverlay.hidden = false;
+  }
+  function closeAuthOverlay() {
+    authOverlay.hidden = true;
+  }
+  function renderBadge(state, session, profile) {
+    userBadge.hidden = false;
+    signInBtn.hidden = state !== "signedOut";
+    signOutBtn.hidden = state === "signedOut";
+    projectsBtn.hidden = state !== "active";
+    if (state === "signedOut") userEmailLabel.textContent = "";
+    else if (state === "pending") userEmailLabel.textContent = session.user.email + " (pending approval)";
+    else if (state === "revoked") userEmailLabel.textContent = session.user.email + " (access revoked)";
+    else userEmailLabel.textContent = session.user.email + (profile.is_admin ? " (admin)" : "");
   }
   async function fetchProfile(userId) {
     const { data, error } = await sb.from("profiles").select("id,email,status,is_admin").eq("id", userId).single();
@@ -3780,23 +3786,23 @@
     if (!session) {
       S.user = null;
       S.profile = null;
-      showGateState("form");
+      renderBadge("signedOut");
+      for (const fn of authReadyListeners) fn(null, null);
       return;
     }
     S.user = session.user;
     const profile = await fetchProfile(session.user.id);
     S.profile = profile;
     if (!profile || profile.status === "pending") {
-      authPendingEmail.textContent = session.user.email;
-      showGateState("pending");
+      renderBadge("pending", session);
       return;
     }
     if (profile.status === "revoked") {
-      showGateState("revoked");
+      renderBadge("revoked", session);
       return;
     }
-    userEmailLabel.textContent = session.user.email + (profile.is_admin ? " (admin)" : "");
-    showGateState("unlocked");
+    renderBadge("active", session, profile);
+    closeAuthOverlay();
     logUsageEvent("session_start");
     for (const fn of authReadyListeners) fn(S.user, S.profile);
   }
@@ -3812,23 +3818,20 @@
       showError(error.message);
       return;
     }
-    showError("Account created. If approval is required you'll see a pending screen after signing in.");
+    showError("Account created \u2014 approval is required before the cloud extras unlock.");
   }
   async function signOut() {
     await sb.auth.signOut();
   }
   function initAuth() {
-    if (!CLOUD_ENABLED) {
-      authOverlay.hidden = true;
-      userBadge.hidden = true;
-      projectsBtn.hidden = true;
+    if (!CLOUD_ENABLED || !sb) {
       for (const fn of authReadyListeners) fn(null, null);
       return;
     }
+    signInBtn.addEventListener("click", openAuthOverlay);
+    authCloseBtn.addEventListener("click", closeAuthOverlay);
     authSignInBtn.addEventListener("click", signIn);
     authSignUpBtn.addEventListener("click", signUp);
-    authSignOutFromPendingBtn.addEventListener("click", signOut);
-    authSignOutFromRevokedBtn.addEventListener("click", signOut);
     signOutBtn.addEventListener("click", signOut);
     authPassword.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") signIn();
@@ -3836,7 +3839,10 @@
     sb.auth.onAuthStateChange((_event, session) => {
       applySession(session);
     });
-    sb.auth.getSession().then(({ data }) => applySession(data.session));
+    sb.auth.getSession().then(({ data }) => applySession(data.session)).catch((err) => {
+      console.warn("Could not restore session:", err);
+      applySession(null);
+    });
   }
 
   // src/app/projects.js

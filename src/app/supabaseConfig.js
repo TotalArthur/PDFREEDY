@@ -8,7 +8,7 @@
 // and markup all still work with no network calls at all. The cloud features
 // (accounts, shared correction library, saved projects, AI-assisted
 // matching) simply stay off.
-const SUPABASE_URL = '';
-const SUPABASE_ANON_KEY = '';
+const SUPABASE_URL = 'https://oixeiotnwosvdatequkv.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_IBMvu5xBhOpW1RfSpTMf7A_7vB-26vK';
 
 export { SUPABASE_URL, SUPABASE_ANON_KEY };

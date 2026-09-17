@@ -1,12 +1,19 @@
 # Setting up the cloud backend (Supabase)
 
-This turns on: accounts + an approval gate, a shared OCR-correction library, cloud-saved
+This turns on: accounts with an approval step, a shared OCR-correction library, cloud-saved
 projects (PDF storage), usage logging, and an "Ask AI" button that sends uncertain OCR
 reads to Gemini for a second opinion. Everything below is a one-time setup. The code side
 is already done — this is just the account/dashboard steps only you can do.
 
-Local mode (no accounts, nothing uploaded, exactly how the tool worked before) is what you
-get if you skip this entirely.
+**Signing in is optional and never blocks the local tool.** Search, OCR, markup and export
+all work fully signed out, exactly as before — the README's "never leaves your machine"
+promise stays true for anyone who never signs in. Approval only gates the cloud extras
+(shared corrections, cloud projects, AI-assist), not the app itself. (An earlier version of
+this feature gated the whole app behind sign-in; that turned out to be worse in every way —
+it made the tool unusable the moment the network was down, and it isn't real security
+either way since it's client-side JS anyone can read. The actual enforcement boundary is
+server-side: Row Level Security decides who can read/write what, regardless of what the UI
+shows.)
 
 ## 1. Create the Supabase project
 
@@ -16,24 +23,12 @@ get if you skip this entirely.
    pick a region close to you.
 3. Wait ~2 minutes for provisioning.
 
-## 2. Get your API keys
+## 2. Get your API keys — done
 
-**Project Settings → API**. You need two values:
-
-- **Project URL** (`https://xxxxxxxx.supabase.co`)
-- **anon / public key** (a long JWT-looking string)
-
-Open `src/app/supabaseConfig.js` in this repo and paste them in:
-
-```js
-const SUPABASE_URL = 'https://xxxxxxxx.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJ...';
-```
-
-Then rebuild: `npm run build` (regenerates `index.html`, which is the file that actually
-ships/runs). The anon key is safe to ship in the built file — it identifies the project,
-not a person; access is enforced by the database rules from step 3, not by keeping this
-key secret.
+`src/app/supabaseConfig.js` already has your project's URL and publishable key filled in
+(project ref `oixeiotnwosvdatequkv`). That key is safe to ship in the built file — it
+identifies the project, not a person; access is enforced by the database rules from step 3,
+not by keeping this key secret. Nothing to do here unless you rotate it later.
 
 ## 3. Create the database schema
 
@@ -50,10 +45,11 @@ storage access policies were already created by the SQL you ran in step 3.
 
 ## 5. Sign up once, then approve yourself
 
-1. Rebuild (`npm run build`) and open the tool — you'll see a sign-in screen.
-2. Click **Create account**, use `artwdickson@gmail.com` and a password. You'll land on a
-   "not yet approved" screen — expected, every new signup starts pending.
-3. Back in the Supabase dashboard, **SQL Editor → New query**:
+1. Open the tool. It's fully usable already, signed out. Click **Sign in** in the header,
+   then **Create account** with `artwdickson@gmail.com` and a password. The header will
+   show "(pending approval)" — expected, every new signup starts pending, and the Projects
+   button and shared corrections stay off until approved.
+2. Back in the Supabase dashboard, **SQL Editor → New query**:
 
    ```sql
    update public.profiles set status = 'active', is_admin = true
@@ -69,30 +65,32 @@ storage access policies were already created by the SQL you ran in step 3.
 This step needs the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)
 installed on your machine (`npm install -g supabase`, or `brew install supabase/tap/supabase`).
 
-1. Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) if you
-   don't already have one set up.
-2. From the repo root:
+From the repo root:
 
-   ```bash
-   supabase login
-   supabase link --project-ref xxxxxxxx        # the ref is in your project URL
-   supabase secrets set GEMINI_API_KEY=your-key-here
-   supabase functions deploy match-assist
-   ```
+```bash
+supabase login
+supabase link --project-ref oixeiotnwosvdatequkv
+supabase secrets set GEMINI_API_KEY=your-key-here
+supabase functions deploy match-assist
+```
 
-3. That's it — the "Ask AI about the uncertain matches" button (shows up in the sidebar
-   whenever a search has Possible-band results) will start working for approved users.
+That's it — the "Ask AI about the uncertain matches" button (shows up in the sidebar
+whenever a search has Possible-band results) will start working for approved users. It
+defaults to `gemini-2.5-flash-lite`, currently the cheapest generally-available Gemini
+model. To use a different one, set `supabase secrets set GEMINI_MODEL=gemini-...` and
+redeploy.
 
-If you ever want to change the model it calls, set another secret:
-`supabase secrets set GEMINI_MODEL=gemini-2.0-flash` (or whichever Gemini model you prefer)
-and redeploy the function.
+The Gemini key only ever needs to exist in two places: wherever you copy it from, and this
+`secrets set` command. It never goes into any file in this repo — the edge function reads
+it from Supabase's encrypted secrets store at request time, so it's never shipped to the
+browser or visible to anyone without dashboard/CLI access to this project.
 
 ## What each piece does, at a glance
 
 | Feature | Where | Gate |
 |---|---|---|
-| Sign in / sign up | header + gate overlay | none (anyone can create an account) |
-| Using the app at all | everywhere | account must be `active` (you approve it) |
+| Local search / OCR / markup / export | everywhere | none — works fully signed out |
+| Sign in / sign up | "Sign in" button in header, opens a dismissible dialog | none (anyone can create an account) |
 | Shared OCR corrections | automatic, syncs on sign-in | active account |
 | Save/open PDF in the cloud | "Projects" button in header | active account, explicit click to upload |
 | Ask AI | button under search, appears when results include uncertain matches | active account + `GEMINI_API_KEY` secret set |

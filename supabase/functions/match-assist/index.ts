@@ -16,7 +16,11 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-2.0-flash';
+// gemini-2.5-flash-lite is the cheapest generally-available Gemini model
+// ($0.10/M input, $0.40/M output tokens as of Sept 2026) — plenty for a
+// short judgement call over a handful of OCR strings. Override with the
+// GEMINI_MODEL secret if you want a stronger model later.
+const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash-lite';
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
 
 const CORS_HEADERS = {

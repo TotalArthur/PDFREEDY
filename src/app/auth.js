@@ -1,30 +1,31 @@
-// Accounts + access control.
+// Accounts + access to the cloud extras.
 //
 // If Supabase isn't configured (supabaseConfig.js left blank), the app runs
-// fully local with no gate at all — same as it always did. Once configured,
-// nothing in the app is usable until the signed-in account has a `profiles`
-// row with status = 'active' (see supabase/schema.sql): new signups land as
-// 'pending' until Arthur approves them, matching the "not for use without
-// express permission" line in the header.
+// fully local with no accounts UI at all — same as it always did.
+//
+// Once configured, signing in is OPTIONAL and never blocks local search,
+// OCR, markup or export — those keep working fully signed out, exactly as
+// advertised in the README. What being signed in and approved
+// (profiles.status = 'active') unlocks is the cloud extras: the shared OCR
+// corrections library, cloud-saved projects, and AI-assisted matching —
+// each of those checks S.profile itself before doing anything (see
+// corrections.js, projects.js, aiMatch.js), so this module's only job is
+// keeping S.user/S.profile in sync and reflecting status in the header.
 import { sb, CLOUD_ENABLED } from './supabaseClient.js';
 import { S } from './state.js';
 import { logUsageEvent } from './usage.js';
 
 const $ = id => document.getElementById(id);
 const authOverlay = $('authOverlay');
-const authForm = $('authForm');
 const authEmail = $('authEmail');
 const authPassword = $('authPassword');
 const authError = $('authError');
 const authSignInBtn = $('authSignInBtn');
 const authSignUpBtn = $('authSignUpBtn');
-const authPending = $('authPending');
-const authPendingEmail = $('authPendingEmail');
-const authRevoked = $('authRevoked');
-const authSignOutFromPendingBtn = $('authSignOutFromPendingBtn');
-const authSignOutFromRevokedBtn = $('authSignOutFromRevokedBtn');
+const authCloseBtn = $('authCloseBtn');
 const userBadge = $('userBadge');
 const userEmailLabel = $('userEmailLabel');
+const signInBtn = $('signInBtn');
 const signOutBtn = $('signOutBtn');
 const projectsBtn = $('projectsBtn');
 
@@ -36,13 +37,20 @@ function showError(msg) {
   authError.hidden = !msg;
 }
 
-function showGateState(state) {
-  authForm.hidden = state !== 'form';
-  authPending.hidden = state !== 'pending';
-  authRevoked.hidden = state !== 'revoked';
-  authOverlay.hidden = state === 'unlocked';
-  userBadge.hidden = state !== 'unlocked';
-  projectsBtn.hidden = state !== 'unlocked';
+function openAuthOverlay() { showError(''); authOverlay.hidden = false; }
+function closeAuthOverlay() { authOverlay.hidden = true; }
+
+// header state: 'signedOut' | 'pending' | 'revoked' | 'active'
+function renderBadge(state, session, profile) {
+  userBadge.hidden = false;
+  signInBtn.hidden = state !== 'signedOut';
+  signOutBtn.hidden = state === 'signedOut';
+  projectsBtn.hidden = state !== 'active';
+
+  if (state === 'signedOut') userEmailLabel.textContent = '';
+  else if (state === 'pending') userEmailLabel.textContent = session.user.email + ' (pending approval)';
+  else if (state === 'revoked') userEmailLabel.textContent = session.user.email + ' (access revoked)';
+  else userEmailLabel.textContent = session.user.email + (profile.is_admin ? ' (admin)' : '');
 }
 
 async function fetchProfile(userId) {
@@ -58,25 +66,19 @@ async function applySession(session) {
   if (!session) {
     S.user = null;
     S.profile = null;
-    showGateState('form');
+    renderBadge('signedOut');
+    for (const fn of authReadyListeners) fn(null, null);
     return;
   }
   S.user = session.user;
   const profile = await fetchProfile(session.user.id);
   S.profile = profile;
 
-  if (!profile || profile.status === 'pending') {
-    authPendingEmail.textContent = session.user.email;
-    showGateState('pending');
-    return;
-  }
-  if (profile.status === 'revoked') {
-    showGateState('revoked');
-    return;
-  }
-  // active
-  userEmailLabel.textContent = session.user.email + (profile.is_admin ? ' (admin)' : '');
-  showGateState('unlocked');
+  if (!profile || profile.status === 'pending') { renderBadge('pending', session); return; }
+  if (profile.status === 'revoked') { renderBadge('revoked', session); return; }
+
+  renderBadge('active', session, profile);
+  closeAuthOverlay();
   logUsageEvent('session_start');
   for (const fn of authReadyListeners) fn(S.user, S.profile);
 }
@@ -91,7 +93,7 @@ async function signUp() {
   showError('');
   const { error } = await sb.auth.signUp({ email: authEmail.value.trim(), password: authPassword.value });
   if (error) { showError(error.message); return; }
-  showError('Account created. If approval is required you\'ll see a pending screen after signing in.');
+  showError('Account created — approval is required before the cloud extras unlock.');
 }
 
 async function signOut() {
@@ -99,26 +101,25 @@ async function signOut() {
 }
 
 function initAuth() {
-  if (!CLOUD_ENABLED) {
-    // Local-only mode: no accounts, nothing to gate. Keep the overlay hidden
-    // and the badge hidden, and just fire the ready callbacks immediately so
-    // other modules that wait on "auth settled" still run.
-    authOverlay.hidden = true;
-    userBadge.hidden = true;
-    projectsBtn.hidden = true;
+  if (!CLOUD_ENABLED || !sb) {
+    // Local-only mode (or the Supabase script failed to load, e.g. an ad
+    // blocker) — no accounts UI, never block anything. Still fire the ready
+    // callbacks so other modules that wait on "auth settled" run.
     for (const fn of authReadyListeners) fn(null, null);
     return;
   }
 
+  signInBtn.addEventListener('click', openAuthOverlay);
+  authCloseBtn.addEventListener('click', closeAuthOverlay);
   authSignInBtn.addEventListener('click', signIn);
   authSignUpBtn.addEventListener('click', signUp);
-  authSignOutFromPendingBtn.addEventListener('click', signOut);
-  authSignOutFromRevokedBtn.addEventListener('click', signOut);
   signOutBtn.addEventListener('click', signOut);
   authPassword.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') signIn(); });
 
   sb.auth.onAuthStateChange((_event, session) => { applySession(session); });
-  sb.auth.getSession().then(({ data }) => applySession(data.session));
+  sb.auth.getSession()
+    .then(({ data }) => applySession(data.session))
+    .catch((err) => { console.warn('Could not restore session:', err); applySession(null); });
 }
 
 export { initAuth, onAuthReady };
